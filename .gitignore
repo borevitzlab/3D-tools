@@ -1,3 +1,7 @@
+# Inputs and outputs
+*.ply
+*.csv
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
