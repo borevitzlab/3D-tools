@@ -295,19 +295,28 @@ def heuristic_tree_filter(cloud_list):
 
 def test_demo():
     """A test case to demonstrate the power of the module"""
-    fname = 'M00002_ascii_forest_crop.ply'
+    fname = 'densified_point_cloud_part_1.ply'
     with open('analysis_'+fname+'.csv', 'w') as f:
-        f.write('X, Y, height, GCC,\n')
+        f.write('ID, X, Y, height, GCC,\n')
         for i, tree in enumerate(bin_trees(fname)):
             E, C = ExtentObj(), ColorsObj()
             for p in tree:
                 E.update(p)
                 C.update(p)
-            f.write('{:.1f}, {:.1f}, {:.2f}, {:.4f},\n'.format(
-                E.centre[0], E.centre[1], E.height, C.GCC))
+            f.write('{:.0f}, {:.1f}, {:.1f}, {:.2f}, {:.4f},\n'.format(
+                i, E.centre[0], E.centre[1], E.height, C.GCC))
             pointcloudfile.write(tree, 'groundless/tree_'+str(i)+'.ply')
+
+def get_args():
+    """Return CLI arguments to determine functions to run."""
+    parser = argparse.ArgumentParser(description='Testing the argparse module')
+    parser.add_argument('fname', help='name of the file to process')
+    parser.add_argument('--treeclouds', help='save individual trees to a file',
+                        action='store_true')
+    return parser.parse_args()
 
 if __name__ == '__main__':
     test_demo()
+    #pointcloudfile.write(remove_ground('meshlabed.ply'), 'out.ply')
     print('Done!')
 
