@@ -257,7 +257,7 @@ class MapObj(CloudAttributes):
 
     def _get_len_components(self):
         """Returns the number of trees in the study area."""
-        return max(set(self.trees.values()))
+        return max(set(self.trees.values())) + 1 # zero-indexed
     len_components = property(_get_len_components)
 
 
@@ -276,8 +276,7 @@ def bin_trees(filename):
     Each such subcloud of the forest is a tree.
     Holds all above-ground points in memory at maximum..."""
     attr = MapObj(pointcloudfile.read(filename))
-    print('Finished first pass')
-    features = [[] for _ in range(attr.len_components + 1)]
+    features = [[] for _ in range(attr.len_components)]
     for point in pointcloudfile.read(filename):
         idx = attr.get_component_at(point)
         if idx is not None and attr.point_not_ground(point):
@@ -293,9 +292,8 @@ def heuristic_tree_filter(cloud_list):
         if len(t) > 50 and max(m[2] for m in t) - min(m[2] for m in t) > 0.5:
             yield t
 
-def test_demo():
+def test_demo(fname):
     """A test case to demonstrate the power of the module"""
-    fname = 'densified_point_cloud_part_1.ply'
     with open('analysis_'+fname+'.csv', 'w') as f:
         f.write('ID, X, Y, height, GCC,\n')
         for i, tree in enumerate(bin_trees(fname)):
@@ -307,6 +305,12 @@ def test_demo():
                 i, E.centre[0], E.centre[1], E.height, C.GCC))
             pointcloudfile.write(tree, 'groundless/tree_'+str(i)+'.ply')
 
+def count_trees(fname):
+    """Count the number of trees in a pointcloud."""
+    attr = MapObj(pointcloudfile.read(fname))
+    print('There are {} trees'.format(attr.len_components))
+    return attr.len_components
+
 def get_args():
     """Return CLI arguments to determine functions to run."""
     parser = argparse.ArgumentParser(description='Testing the argparse module')
@@ -316,7 +320,8 @@ def get_args():
     return parser.parse_args()
 
 if __name__ == '__main__':
-    test_demo()
-    #pointcloudfile.write(remove_ground('meshlabed.ply'), 'out.ply')
+    file = '2015-05-03_densified_point_cloud.ply'
+    test_demo(file)
+    pointcloudfile.write(remove_ground(file), 'groundless.ply')
     print('Done!')
 
