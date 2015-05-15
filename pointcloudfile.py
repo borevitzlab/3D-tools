@@ -28,10 +28,14 @@ def _read_ply(fname):
     raw_header = []
     while True:
         raw_header.append(next(f))
-        if raw_header[-1] == b'end_header\n':
+        if raw_header[-1] in (b'end_header\n', b'end_header\r\n'):
             break
     header = [line.strip().split(b' ') for line in raw_header]
     header = [(line[2], line[1]) for line in header if line[0] == b'property']
+    if any(b' diffuse_' in l for l in raw_header):
+        cols = {'r': b'diffuse_red', 'g': b'diffuse_green', 'b': b'diffuse_blue'}
+    else:
+        cols = {'r': b'red', 'g': b'green', 'b': b'blue'}
     if b'format ascii 1.0\n' in raw_header:
         head = {}
         for i, line in enumerate(header):
@@ -41,13 +45,13 @@ def _read_ply(fname):
             out = tuple([float(point[head[s][0]]) if head[s][1]
                          else int(point[head[s][0]])
                          for s in (b'x', b'y', b'z',
-                                   b'red', b'green', b'blue')])
+                                   cols['r'], cols['g'], cols['b'])])
             yield out
     else:
         head = [h[0] for h in header]
         idx = {'x':head.index(b'x'), 'y':head.index(b'y'), 'z':head.index(b'z'),
-               'r':head.index(b'red'), 'g':head.index(b'green'),
-               'b':head.index(b'blue')}
+               'r':head.index(cols['r']), 'g':head.index(cols['g']),
+               'b':head.index(cols['b'])}
         form_str = '<'
         if b'format binary_big_endian 1.0\n' in raw_header:
             form_str = '>'
@@ -93,8 +97,6 @@ property float z
 property uchar red
 property uchar green
 property uchar blue
-element face 0
-property list uchar int vertex_indices
 end_header
 """.format(count)
     binary = struct.Struct('<fffBBB')

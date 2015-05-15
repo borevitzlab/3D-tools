@@ -1,6 +1,8 @@
 # Inputs and outputs
 *.ply
 *.csv
+*.xyz
+*.las
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
