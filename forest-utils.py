@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
+"""Tools for analysing forest point clouds.
 """
-Testing the idea of using objects that are updated by each point.
 
-Distance units are assumed to be meters.
-"""
+import argparse
+import math
+import os
 
 import pointcloudfile
-import math
 
 # Default to 10cm squares for analysis; optimum depends on cloud density
 CELL_SIZE = 0.1
@@ -260,6 +260,26 @@ class MapObj(CloudAttributes):
         return max(set(self.trees.values())) + 1 # zero-indexed
     len_components = property(_get_len_components)
 
+    def tree_extent(self, tree_id):
+        """Return (ID, X, Y, height, area)"""
+        assert isinstance(tree_id, int)
+        if tree_id > self.len_components:
+            raise ValueError('Given tree ID is out of range')
+        retval = [tree_id]
+        keys = [k for k, v in self.trees.items() if v == tree_id]
+        retval.append((max(k[0] for k in keys) + min(k[0] for k in keys)) / 2)
+        retval.append((max(k[1] for k in keys) + min(k[1] for k in keys)) / 2)
+        height = 0
+        for x, y in keys:
+            small_keys = ((JOINED_CELLS*x+a, JOINED_CELLS*y+b)
+                          for a in range(JOINED_CELLS)
+                          for b in range(JOINED_CELLS))
+            for k in small_keys:
+                height = max(height,
+                             self.canopy.get(k, 0) - self.ground.get(k, 0))
+        retval.append(height)
+        retval.append(len(keys) * (CELL_SIZE * JOINED_CELLS) ** 2)
+        return tuple(retval)
 
 
 def remove_ground(filename):
@@ -301,7 +321,7 @@ def test_demo(fname):
             for p in tree:
                 E.update(p)
                 C.update(p)
-            f.write('{:.0f}, {:.1f}, {:.1f}, {:.2f}, {:.4f},\n'.format(
+            f.write('{:.1f}, {:.1f}, {:.1f}, {:.2f}, {:.4f},\n'.format(
                 i, E.centre[0], E.centre[1], E.height, C.GCC))
             pointcloudfile.write(tree, 'groundless/tree_'+str(i)+'.ply')
 
@@ -310,6 +330,21 @@ def count_trees(fname):
     attr = MapObj(pointcloudfile.read(fname))
     print('There are {} trees'.format(attr.len_components))
     return attr.len_components
+
+def stream_spatial(fname):
+    """Analysis of the forest, without allowing for point export or color
+    analysis."""
+    lines = ['ID, X, Y, height, area,\n']
+    form_str = '{:.1f}, {:.1f}, {:.1f}, {:.2f}, {:.2f},\n'
+    attr = MapObj(pointcloudfile.read(fname))
+    print('Got points, analysing...')
+    for ID in range(attr.len_components):
+        i, x, y, h, a = attr.tree_extent(ID)
+        if h < 0.5 or a < 0.2:
+            continue
+        lines.append(form_str.format(i, x, y, h, a))
+    with open('analysis_spatial_'+fname+'.csv', 'w') as f:
+        f.writelines(lines)
 
 def get_args():
     """Return CLI arguments to determine functions to run."""
@@ -321,6 +356,7 @@ def get_args():
 
 if __name__ == '__main__':
     file = '2015-05-03_densified_point_cloud.ply'
+    stream_spatial(file)
     test_demo(file)
     pointcloudfile.write(remove_ground(file), 'groundless.ply')
     print('Done!')
