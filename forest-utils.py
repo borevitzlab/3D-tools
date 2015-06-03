@@ -189,7 +189,8 @@ class MapObj(CloudAttributes):
         True if within GROUND_DEPTH of the lowest point in the cell.
         If not lossy, also true for lowest ground point in a cell."""
         x, y, z, *_ = self.reformat(point)
-        idx = self.coords((x, y))
+        height = z - self.ground[self.coords((x, y))]
+        return all(keep_lowest, height==0) or height > GROUND_DEPTH
 
     def _get_corners(self):
         """Return the co-ordinates of the corners of the XY bounding box."""
@@ -282,11 +283,13 @@ class MapObj(CloudAttributes):
         return tuple(retval)
 
 
+def remove_ground(filename, keep_lowest=False):
     """Precise ground removal, without hurting tree height (much).
     Operates by dividing the cloud into square columns col_w metres wide,
     and removes the bottom depth meters of each."""
     attr = MapObj(pointcloudfile.read(filename))
     for point in pointcloudfile.read(filename):
+        if attr.point_not_ground(point, keep_lowest):
             yield point
 
 def bin_trees(filename):
@@ -307,6 +310,8 @@ def heuristic_tree_filter(cloud_list):
     """
     while cloud_list:
         t = list(cloud_list.pop())
+        height = [m[2] for m in t]
+        if len(t) > 50 and max(height) - min(height) > SLICE_DEPTH:
             yield t
 
 def test_demo(fname):
@@ -331,20 +336,45 @@ def count_trees(fname):
 def stream_spatial(fname):
     """Analysis of the forest, without allowing for point export or color
     analysis."""
-    lines = ['ID, X, Y, height, area,\n']
-    form_str = '{:.1f}, {:.1f}, {:.1f}, {:.2f}, {:.2f},\n'
+    lines = ['X, Y, height, area,\n']
+    form_str = '{:.1f}, {:.1f}, {:.2f}, {:.2f},\n'
     attr = MapObj(pointcloudfile.read(fname))
     print('Got points, analysing...')
     for ID in range(attr.len_components):
         i, x, y, h, a = attr.tree_extent(ID)
+        if h < SLICE_DEPTH or a <= (CELL_SIZE * JOINED_CELLS)**2:
             continue
-        lines.append(form_str.format(i, x, y, h, a))
+        lines.append(form_str.format(x, y, h, a))
     with open('analysis_spatial_'+fname+'.csv', 'w') as f:
         f.writelines(lines)
 
 def get_args():
     """Return CLI arguments to determine functions to run."""
+    parser = argparse.ArgumentParser(description='Takes a .ply forest '
+        'point cloud; outputs attributes of each tree to .csv')
+    parser.add_argument('file', help='name of the file to process')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('-a', '--analyse',
+                      help='save .csv list of attributes for each tree',
+                      action='store_true', default=True)
+    mode.add_argument('-s', '--save-trees',
+                      help='save tree point clouds (TODO)',
+                      action='store_true')
+    mode.add_argument('-r', '--reduce-density',
+                      help='discard all but lowest ground points in each cell',
+                      action='store_true')
     return parser.parse_args()
 
 if __name__ == '__main__':
+    args = get_args()
+    if not os.path.isfile(args.file):
+        raise FileNotFoundError
+    if not args.file.endswith('.ply'):
+        raise ValueError('file must be a point cloud in .ply format')
+    if args.analyse:
+        stream_spatial(args.file)
+    elif args.reduce-density:
+        pointcloudfile.write(remove_ground(file, True), 'groundless.ply')
+    elif save-trees:
+        test_demo(args.file)
 
