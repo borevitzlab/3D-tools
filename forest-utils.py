@@ -184,12 +184,12 @@ class MapObj(CloudAttributes):
         x, y, *_ = pos
         return math.floor(x / CELL_SIZE), math.floor(y / CELL_SIZE)
 
-    def point_not_ground(self, point):
-        """Returns boolean wether the point is not classified as ground - ie
-        True if within GROUND_DEPTH of the lowest point in the cell (30cm)."""
+    def point_not_ground(self, point, keep_lowest=False):
+        """Returns boolean whether the point is not classified as ground - ie
+        True if within GROUND_DEPTH of the lowest point in the cell.
+        If not lossy, also true for lowest ground point in a cell."""
         x, y, z, *_ = self.reformat(point)
         idx = self.coords((x, y))
-        return z - self.ground[idx] > GROUND_DEPTH
 
     def _get_corners(self):
         """Return the co-ordinates of the corners of the XY bounding box."""
@@ -282,13 +282,11 @@ class MapObj(CloudAttributes):
         return tuple(retval)
 
 
-def remove_ground(filename):
     """Precise ground removal, without hurting tree height (much).
     Operates by dividing the cloud into square columns col_w metres wide,
     and removes the bottom depth meters of each."""
     attr = MapObj(pointcloudfile.read(filename))
     for point in pointcloudfile.read(filename):
-        if attr.point_not_ground(point):
             yield point
 
 def bin_trees(filename):
@@ -309,7 +307,6 @@ def heuristic_tree_filter(cloud_list):
     """
     while cloud_list:
         t = list(cloud_list.pop())
-        if len(t) > 50 and max(m[2] for m in t) - min(m[2] for m in t) > 0.5:
             yield t
 
 def test_demo(fname):
@@ -340,7 +337,6 @@ def stream_spatial(fname):
     print('Got points, analysing...')
     for ID in range(attr.len_components):
         i, x, y, h, a = attr.tree_extent(ID)
-        if h < 0.5 or a < 0.2:
             continue
         lines.append(form_str.format(i, x, y, h, a))
     with open('analysis_spatial_'+fname+'.csv', 'w') as f:
@@ -348,16 +344,7 @@ def stream_spatial(fname):
 
 def get_args():
     """Return CLI arguments to determine functions to run."""
-    parser = argparse.ArgumentParser(description='Testing the argparse module')
-    parser.add_argument('fname', help='name of the file to process')
-    parser.add_argument('--treeclouds', help='save individual trees to a file',
-                        action='store_true')
     return parser.parse_args()
 
 if __name__ == '__main__':
-    file = '2015-05-03_densified_point_cloud.ply'
-    stream_spatial(file)
-    test_demo(file)
-    pointcloudfile.write(remove_ground(file), 'groundless.ply')
-    print('Done!')
 
