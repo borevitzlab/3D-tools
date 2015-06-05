@@ -21,128 +21,8 @@ SLICE_DEPTH = 0.6
 # The component analysis uses cells JOINED_CELLS * CELL_SIZE on each side
 JOINED_CELLS = 4
 
-class CloudAttributes(object):
-    """Parent class for ExtentObj and ColorObj"""
-    def __init__(self, initial=None):
-        """Initialises the accumulator object"""
-        self.count = 0
-        if initial is not None:
-            self.start(initial)
 
-    def start(self, initial):
-        """Updates the object with all points in the cloud argument"""
-        for point in initial:
-            self.update(point)
-
-    def update(self, point):
-        """The update method; override in children."""
-        #pylint:disable=unused-argument
-        self.count += 1
-
-    @staticmethod
-    def reformat(point):
-        """Formats points as an (x, y, z, r, g, b) tuple.  This method allows
-        for easy changes to the format in future; just change this interface.
-        """
-        return point
-
-
-class ExtentObj(CloudAttributes):
-    """Stores the extent of a cloud; max and min in x, y, and z dimensions."""
-    def __init__(self, initial=None):
-        """Initialises data"""
-        self.x_max = self.x_min = self.y_max = None
-        self.y_min = self.z_max = self.z_min = None
-        super().__init__(initial)
-
-    def update(self, point):
-        """Updates stored data based on a point."""
-        self.count += 1
-        x, y, z, *_ = self.reformat(point)
-        if self.x_max is None:
-            self.x_max = self.x_min = x
-            self.y_max = self.y_min = y
-            self.z_max = self.z_min = z
-            return
-        if self.x_max < x:
-            self.x_max = x
-        elif self.x_min > x:
-            self.x_min = x
-        if self.y_max < y:
-            self.y_max = y
-        elif self.y_min > y:
-            self.y_min = y
-        if self.z_max < z:
-            self.z_max = z
-        elif self.z_min > z:
-            self.z_min = z
-
-    def _get_corners(self):
-        """Return the co-ordinates of the corners of the XY bounding box."""
-        return ((self.x_min, self.y_min), (self.x_max, self.y_max))
-    corners = property(_get_corners)
-
-    def _get_height(self):
-        """The height of the cloud"""
-        return self.z_max - self.z_min
-    height = property(_get_height)
-
-    def _get_centre(self):
-        """The middle of the cloud; tuple of (x, y)"""
-        return (self.x_max + self.x_min)/2, (self.y_max + self.y_min)/2
-    centre = property(_get_centre)
-
-    def __str__(self):
-        """String method for printing, etc."""
-        x = 'X extent: {:.1f} to {:.1f}'.format(self.x_min, self.x_max)
-        y = 'Y extent: {:.1f} to {:.1f}'.format(self.y_min, self.y_max)
-        z = 'Z extent: {:.1f} to {:.1f}'.format(self.z_min, self.z_max)
-        return '{}\n{}\n{}\n'.format(x, y, z)
-
-
-class ColorsObj(CloudAttributes):
-    """Stores a histogram of encountered colors"""
-    def __init__(self, initial=None):
-        """Initialises data"""
-        self.red = [0]*256
-        self.green = [0]*256
-        self.blue = [0]*256
-        super().__init__(initial)
-
-    def update(self, point):
-        """Updates stored data based on a point.
-        The point is a tuple of (x, y, z, r, g, b)
-        """
-        self.count += 1
-        _, _, _, r, g, b = self.reformat(point)
-        self.red[r] += 1
-        self.green[g] += 1
-        self.blue[b] += 1
-
-    def _get_sum_rgb(self):
-        """Returns an RGB tuple of the sum of observed values."""
-        red = green = blue = 0
-        for idx, r in enumerate(self.red):
-            red += idx*r
-        for idx, g in enumerate(self.green):
-            green += idx*g
-        for idx, b in enumerate(self.blue):
-            blue += idx*b
-        return (red, green, blue)
-    rgb_sum = property(_get_sum_rgb)
-
-    def _get_mean_rgb(self):
-        """Returns an RGB tuple of the mean observed values."""
-        return tuple(int(c/self.count) for c in self.rgb_sum)
-    rgb = property(_get_mean_rgb)
-
-    def _get_GCC(self):
-        """Returns a float value for Green Chromatic Co-ordinate."""
-        return self.rgb_sum[1] / sum(self.rgb_sum)
-    GCC = property(_get_GCC)
-
-
-class MapObj(CloudAttributes):
+class MapObj(object):
     """Stores a maximum and minimum height map of the cloud, in GRID_SIZE
     cells.  Hides data structure and accessed through coordinates."""
     # Until I think of something better, maps are stored as dictionaries
@@ -154,14 +34,18 @@ class MapObj(CloudAttributes):
         self.canopy = dict()
         self.density = dict()
         self.ground = dict()
+        self.colours = dict()
         self._components_counted_at = None
         self._components_map = None
-        super().__init__(initial)
+        self.count = 0
+        if initial is not None:
+            for point in initial:
+                self.update(point)
 
     def update(self, point):
         """Expand, correct, or maintain map with a new observed point."""
         self.count += 1
-        x, y, z, *_ = self.reformat(point)
+        x, y, z, r, g, b = point
         idx = self.coords((x, y))
         if not self.density.get(idx):
             self.density[idx] = 1
@@ -173,6 +57,8 @@ class MapObj(CloudAttributes):
             self.canopy[idx] = z
         if self.ground[idx] > z:
             self.ground[idx] = z
+        R, G, B = self.colours.get(idx, (0, 0, 0))
+        self.colours[idx] = (R+r, G+g, B+b)
 
     @staticmethod
     def coords(pos):
@@ -188,9 +74,9 @@ class MapObj(CloudAttributes):
         """Returns boolean whether the point is not classified as ground - ie
         True if within GROUND_DEPTH of the lowest point in the cell.
         If not lossy, also true for lowest ground point in a cell."""
-        x, y, z, *_ = self.reformat(point)
+        x, y, z, *_ = point
         height = z - self.ground[self.coords((x, y))]
-        return all(keep_lowest, height==0) or height > GROUND_DEPTH
+        return (keep_lowest and height == 0) or height > GROUND_DEPTH
 
     def _get_corners(self):
         """Return the co-ordinates of the corners of the XY bounding box."""
@@ -251,7 +137,7 @@ class MapObj(CloudAttributes):
 
     def get_component_at(self, point):
         """Get the component ID at a particular point; int>=0 or None"""
-        x, y, *_ = self.reformat(point)
+        x, y, *_ = point
         key = self.coords((x, y))
         key = tuple(math.floor(k/JOINED_CELLS) for k in key)
         return self.trees.get(key)
@@ -261,16 +147,20 @@ class MapObj(CloudAttributes):
         return max(set(self.trees.values())) + 1 # zero-indexed
     len_components = property(_get_len_components)
 
-    def tree_extent(self, tree_id):
-        """Return (ID, X, Y, height, area)"""
+    def tree_data(self, tree_id):
+        """Return (ID, X, Y, height, area, mean_red, mean_green, mean_blue,
+                   point_count)"""
+        #pylint:disable=too-many-locals
         assert isinstance(tree_id, int)
         if tree_id > self.len_components:
             raise ValueError('Given tree ID is out of range')
-        retval = [tree_id]
+        retval = []
         keys = [k for k, v in self.trees.items() if v == tree_id]
         retval.append((max(k[0] for k in keys) + min(k[0] for k in keys)) / 2)
         retval.append((max(k[1] for k in keys) + min(k[1] for k in keys)) / 2)
         height = 0
+        r, g, b = 0, 0, 0
+        points = 0
         for x, y in keys:
             small_keys = ((JOINED_CELLS*x+a, JOINED_CELLS*y+b)
                           for a in range(JOINED_CELLS)
@@ -278,8 +168,16 @@ class MapObj(CloudAttributes):
             for k in small_keys:
                 height = max(height,
                              self.canopy.get(k, 0) - self.ground.get(k, 0))
+                R, G, B = self.colours.get(k, (0, 0, 0))
+                r += R
+                g += G
+                b += B
+                points += self.density.get(k, 0)
         retval.append(height)
         retval.append(len(keys) * (CELL_SIZE * JOINED_CELLS) ** 2)
+        for c in (r, g, b):
+            retval.append(c/points)
+        retval.append(points)
         return tuple(retval)
 
 
@@ -322,19 +220,6 @@ def offset_for(filename):
     with open(offset) as f:
         return [float(n) for n in f.readline().split(' ')]
 
-def test_demo(fname):
-    """A test case to demonstrate the power of the module"""
-    with open('analysis_'+fname+'.csv', 'w') as f:
-        f.write('ID, X, Y, height, GCC,\n')
-        for i, tree in enumerate(bin_trees(fname)):
-            E, C = ExtentObj(), ColorsObj()
-            for p in tree:
-                E.update(p)
-                C.update(p)
-            f.write('{:.1f}, {:.1f}, {:.1f}, {:.2f}, {:.4f},\n'.format(
-                i, E.centre[0], E.centre[1], E.height, C.GCC))
-            pointcloudfile.write(tree, 'groundless/tree_'+str(i)+'.ply')
-
 def count_trees(fname):
     """Count the number of trees in a pointcloud."""
     attr = MapObj(pointcloudfile.read(fname))
@@ -344,37 +229,39 @@ def count_trees(fname):
 def stream_spatial(fname):
     """Analysis of the forest, without allowing for point export or color
     analysis."""
-    lines = ['GPS_X, GPS_Y, X, Y, height, area,\n']
-    form_str = '{:.1f}, {:.1f}, {:.1f}, {:.1f}, {:.2f}, {:.2f},\n'
+    # NB: colours include ground points.
+    # Until that's fixed, first reduce density to minimise impact.
+    lines = ['GPS?_X, GPS?_Y, X, Y, height, area, '
+             'mean_red, mean_green, mean_blue, point_count,\n']
+    form_str = ('{:.1f}, {:.1f}, {:.1f}, {:.1f}, {:.2f}, {:.2f}, '
+                '{:.3f}, {:.3f}, {:.3f}, {:.0f},\n')
     x_, y_, _ = offset_for(fname)
     attr = MapObj(pointcloudfile.read(fname))
     print('Got points, analysing...')
     for ID in range(attr.len_components):
-        i, x, y, h, a = attr.tree_extent(ID)
-        if h < SLICE_DEPTH or a <= (CELL_SIZE * JOINED_CELLS)**2:
-            continue
-        lines.append(form_str.format(x+x_, y+y_, x, y, h, a))
+        x, y, *rest = attr.tree_data(ID)
+        lines.append(form_str.format(x+x_, y+y_, x, y, *rest))
     with open('analysis_spatial_'+fname+'.csv', 'w') as f:
         f.writelines(lines)
 
 def get_args():
     """Return CLI arguments to determine functions to run."""
-    parser = argparse.ArgumentParser(description='Takes a .ply forest '
-        'point cloud; outputs attributes of each tree to .csv')
+    parser = argparse.ArgumentParser(
+        description='Takes a .ply forest  point cloud; ' +
+        'outputs attributes of each tree to .csv')
     parser.add_argument('file', help='name of the file to process')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('-a', '--analyse',
                       help='save .csv list of attributes for each tree',
-                      action='store_true', default=True)
-    mode.add_argument('-s', '--save-trees',
-                      help='save tree point clouds (TODO)',
                       action='store_true')
-    mode.add_argument('-r', '--reduce-density',
+    mode.add_argument('-r', '--reduce_density',
                       help='discard all but lowest ground points in each cell',
                       action='store_true')
     return parser.parse_args()
 
 if __name__ == '__main__':
+    # pylint doesn't deal with argparse very well
+    #pylint:disable=undefined-variable
     args = get_args()
     if not os.path.isfile(args.file):
         raise FileNotFoundError
@@ -382,8 +269,9 @@ if __name__ == '__main__':
         raise ValueError('file must be a point cloud in .ply format')
     if args.analyse:
         stream_spatial(args.file)
-    elif args.reduce-density:
-        pointcloudfile.write(remove_ground(file, True), 'groundless.ply')
-    elif save-trees:
-        test_demo(args.file)
+    elif args.reduce_density:
+        pointcloudfile.write(remove_ground(args.file, True),
+                             args.file[:-4] + '_groundless.ply')
+    else:
+        print('A mode argument is required.  Try "--help"" for more info')
 
