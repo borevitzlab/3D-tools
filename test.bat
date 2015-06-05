@@ -1,2 +1,2 @@
-py forest-utils.py test_point_cloud_part_1.ply
+py forest-utils.py test_point_cloud_part_2.ply
 pause
