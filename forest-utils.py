@@ -214,19 +214,16 @@ def heuristic_tree_filter(cloud_list):
 
 def offset_for(filename):
     """Return the (x, y, z) offset for a Pix4D .ply cloud."""
-    offset = filename[:-4] + '_ply_offset.xyz'
+    if filename.endswith('_groundless.ply'):
+        offset = filename[:-15] + '_ply_offset.xyz'
+    else:
+        offset = filename[:-4] + '_ply_offset.xyz'
     if not os.path.isfile(offset):
         return 0, 0, 0
     with open(offset) as f:
         return [float(n) for n in f.readline().split(' ')]
 
-def count_trees(fname):
-    """Count the number of trees in a pointcloud."""
-    attr = MapObj(pointcloudfile.read(fname))
-    print('There are {} trees'.format(attr.len_components))
-    return attr.len_components
-
-def stream_spatial(fname):
+def stream_analysis(fname, out):
     """Analysis of the forest, without allowing for point export or color
     analysis."""
     # NB: colours include ground points.
@@ -241,37 +238,23 @@ def stream_spatial(fname):
     for ID in range(attr.len_components):
         x, y, *rest = attr.tree_data(ID)
         lines.append(form_str.format(x+x_, y+y_, x, y, *rest))
-    with open('analysis_spatial_'+fname+'.csv', 'w') as f:
+    with open(out, 'w') as f:
         f.writelines(lines)
 
-def get_args():
-    """Return CLI arguments to determine functions to run."""
+
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Takes a .ply forest  point cloud; ' +
         'outputs attributes of each tree to .csv')
     parser.add_argument('file', help='name of the file to process')
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument('-a', '--analyse',
-                      help='save .csv list of attributes for each tree',
-                      action='store_true')
-    mode.add_argument('-r', '--reduce_density',
-                      help='discard all but lowest ground points in each cell',
-                      action='store_true')
-    return parser.parse_args()
-
-if __name__ == '__main__':
-    # pylint doesn't deal with argparse very well
-    #pylint:disable=undefined-variable
-    args = get_args()
+    parser.add_argument('out', nargs='?', default='.',
+                        help='directory for output files (optional)')
+    args = parser.parse_args()
     if not os.path.isfile(args.file):
         raise FileNotFoundError
     if not args.file.endswith('.ply'):
         raise ValueError('file must be a point cloud in .ply format')
-    if args.analyse:
-        stream_spatial(args.file)
-    elif args.reduce_density:
-        pointcloudfile.write(remove_ground(args.file, True),
-                             args.file[:-4] + '_groundless.ply')
-    else:
-        print('A mode argument is required.  Try "--help"" for more info')
+    groundless = os.path.join(args.out, args.file[:-4] + '_groundless.ply')
+    pointcloudfile.write(remove_ground(args.file, True), groundless)
+    stream_analysis(groundless, '{}_analysis.csv'.format(args.file[:-4]))
 
