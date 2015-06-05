@@ -314,6 +314,14 @@ def heuristic_tree_filter(cloud_list):
         if len(t) > 50 and max(height) - min(height) > SLICE_DEPTH:
             yield t
 
+def offset_for(filename):
+    """Return the (x, y, z) offset for a Pix4D .ply cloud."""
+    offset = filename[:-4] + '_ply_offset.xyz'
+    if not os.path.isfile(offset):
+        return 0, 0, 0
+    with open(offset) as f:
+        return [float(n) for n in f.readline().split(' ')]
+
 def test_demo(fname):
     """A test case to demonstrate the power of the module"""
     with open('analysis_'+fname+'.csv', 'w') as f:
@@ -336,15 +344,16 @@ def count_trees(fname):
 def stream_spatial(fname):
     """Analysis of the forest, without allowing for point export or color
     analysis."""
-    lines = ['X, Y, height, area,\n']
-    form_str = '{:.1f}, {:.1f}, {:.2f}, {:.2f},\n'
+    lines = ['GPS_X, GPS_Y, X, Y, height, area,\n']
+    form_str = '{:.1f}, {:.1f}, {:.1f}, {:.1f}, {:.2f}, {:.2f},\n'
+    x_, y_, _ = offset_for(fname)
     attr = MapObj(pointcloudfile.read(fname))
     print('Got points, analysing...')
     for ID in range(attr.len_components):
         i, x, y, h, a = attr.tree_extent(ID)
         if h < SLICE_DEPTH or a <= (CELL_SIZE * JOINED_CELLS)**2:
             continue
-        lines.append(form_str.format(x, y, h, a))
+        lines.append(form_str.format(x+x_, y+y_, x, y, h, a))
     with open('analysis_spatial_'+fname+'.csv', 'w') as f:
         f.writelines(lines)
 
