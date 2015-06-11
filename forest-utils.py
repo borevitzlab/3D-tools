@@ -159,6 +159,7 @@ class MapObj(object):
         keys = [k for k, v in self.trees.items() if v == tree_id]
         retval.append((max(k[0] for k in keys) + min(k[0] for k in keys)) / 2)
         retval.append((max(k[1] for k in keys) + min(k[1] for k in keys)) / 2)
+        retval = [k/JOINED_CELLS for k in retval] # scale output
         height = 0
         r, g, b = 0, 0, 0
         points = 0
@@ -226,9 +227,10 @@ def stream_analysis(fname, attr, out):
                 '{:.3f}, {:.3f}, {:.3f}, {:.0f},\n')
     x_, y_, _ = offset_for(fname)
     for ID in range(attr.len_components):
-        x, y, *rest = attr.tree_data(ID)
+        x, y, h, a, *rest = attr.tree_data(ID)
         lat, lon = UTM_to_LatLon(x+x_, y+y_)
-        lines.append(form_str.format(lat, lon, x, y, *rest))
+        if h > SLICE_DEPTH and a > (CELL_SIZE * JOINED_CELLS) ** 2:
+            lines.append(form_str.format(lat, lon, x, y, h, a, *rest))
     with open(out, 'w') as f:
         f.writelines(lines)
 
