@@ -9,6 +9,7 @@ Returns generator objects, which yield points, due to out-of-memory issues.
 
 import struct
 import os.path
+from tempfile import SpooledTemporaryFile
 
 def read(fname):
     """Passes the file to a read function for that format."""
@@ -28,7 +29,9 @@ def _read_ply(fname):
     raw_header = []
     while True:
         raw_header.append(next(f))
-        if raw_header[-1] in (b'end_header\n', b'end_header\r\n'):
+        if raw_header[-1].startswith(b'end_header'):
+            # ply files can have basically any line ending...
+            lineending = raw_header[0].replace(b'ply', b'')
             break
     header = [line.strip().split(b' ') for line in raw_header]
     header = [(line[2], line[1]) for line in header if line[0] == b'property']
@@ -36,7 +39,7 @@ def _read_ply(fname):
         cols = {'r': b'diffuse_red', 'g': b'diffuse_green', 'b': b'diffuse_blue'}
     else:
         cols = {'r': b'red', 'g': b'green', 'b': b'blue'}
-    if b'format ascii 1.0\n' in raw_header:
+    if b'format ascii 1.0'+lineending in raw_header:
         head = {}
         for i, line in enumerate(header):
             head[line[0]] = (i, b'float' in line[1] or line[1] == b'double')
@@ -53,7 +56,7 @@ def _read_ply(fname):
                'r':head.index(cols['r']), 'g':head.index(cols['g']),
                'b':head.index(cols['b'])}
         form_str = '<'
-        if b'format binary_big_endian 1.0\n' in raw_header:
+        if b'format binary_big_endian 1.0'+lineending in raw_header:
             form_str = '>'
         for _, type_ in header:
             if type_ == b'float':
@@ -73,36 +76,35 @@ def _read_ply(fname):
             elif type_ == b'double':
                 form_str += 'd'
         point = struct.Struct(form_str)
+        # TODO: speed up reading.  larger chunks?
         raw = f.read(point.size)
+        ind = (idx['x'], idx['y'], idx['z'], idx['r'], idx['g'], idx['b'])
         while raw:
             p_tup = point.unpack(raw)
-            yield (p_tup[idx['x']], p_tup[idx['y']], p_tup[idx['z']],
-                   p_tup[idx['r']], p_tup[idx['g']], p_tup[idx['b']])
+            yield tuple(p_tup[i] for i in ind)
             raw = f.read(point.size)
     f.close()
 
-def write(cloud, fname, count=None):
+def write(cloud, fname):
     """Write the given cloud to disk."""
-    if count is None:
-        # If count is not given, load all to find out and hope for the best
-        cloud = list(cloud)
-        count = len(cloud)
-    header = """ply
-format binary_little_endian 1.0
-comment written by read_tree.py
-element vertex {}
-property float x
-property float y
-property float z
-property uchar red
-property uchar green
-property uchar blue
-end_header
-""".format(count)
     binary = struct.Struct('<fffBBB')
-    with open(fname, 'wb') as f:
-        f.write(header.encode('ascii'))
-        for point in cloud:
-            #pylint:disable=star-args
-            f.write(binary.pack(*point))
+    with SpooledTemporaryFile(max_size=2**20, mode='w+b') as temp_storage:
+        for count, point in enumerate(cloud, start=1):
+            temp_storage.write(binary.pack(*point))
+        temp_storage.seek(0)
+        header = ['ply', 'format binary_little_endian 1.0',
+                  'element vertex {}'.format(count),
+                  'property float x',
+                  'property float y',
+                  'property float z',
+                  'property uchar red',
+                  'property uchar green',
+                  'property uchar blue',
+                  'end_header', '']
+        with open(fname, 'wb') as f:
+            f.write('\n'.join(header).encode('ascii'))
+            chunk = temp_storage.read(8192)
+            while chunk:
+                f.write(chunk)
+                chunk = temp_storage.read(8192)
 
