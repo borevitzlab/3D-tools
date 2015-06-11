@@ -7,6 +7,7 @@ import math
 import os
 
 import pointcloudfile
+from utm_convert import UTM_to_LatLon
 
 # Default to 10cm squares for analysis; optimum depends on cloud density
 CELL_SIZE = 0.1
@@ -219,14 +220,15 @@ def stream_analysis(fname, attr, out):
     analysis."""
     # NB: colours include ground points.
     # Until that's fixed, first reduce density to minimise impact.
-    lines = ['GPS?_X, GPS?_Y, X, Y, height, area, '
+    lines = ['latitude, longitude, local_X, local_Y, height, area, '
              'mean_red, mean_green, mean_blue, point_count,\n']
-    form_str = ('{:.1f}, {:.1f}, {:.1f}, {:.1f}, {:.2f}, {:.2f}, '
+    form_str = ('{}, {}, {:.1f}, {:.1f}, {:.2f}, {:.2f}, '
                 '{:.3f}, {:.3f}, {:.3f}, {:.0f},\n')
     x_, y_, _ = offset_for(fname)
     for ID in range(attr.len_components):
         x, y, *rest = attr.tree_data(ID)
-        lines.append(form_str.format(x+x_, y+y_, x, y, *rest))
+        lat, lon = UTM_to_LatLon(x+x_, y+y_)
+        lines.append(form_str.format(lat, lon, x, y, *rest))
     with open(out, 'w') as f:
         f.writelines(lines)
 
@@ -243,10 +245,11 @@ if __name__ == '__main__':
         raise FileNotFoundError(args.file)
     if not args.file.endswith('.ply'):
         raise ValueError('file must be a point cloud in .ply format')
+    print('Working...')
     groundless = os.path.join(args.out, args.file[:-4] + '_groundless.ply')
     attr_map = MapObj(pointcloudfile.read(args.file))
-    pointcloudfile.write(remove_ground(args.file, attr_map, True), groundless)
+    #pointcloudfile.write(remove_ground(args.file, attr_map, True), groundless)
     stream_analysis(groundless, attr_map,
-                     '{}_analysis.csv'.format(args.file[:-4]))
+                    '{}_analysis.csv'.format(args.file[:-4]))
     print('Done.')
 
