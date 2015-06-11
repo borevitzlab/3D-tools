@@ -181,49 +181,40 @@ class MapObj(object):
         return tuple(retval)
 
 
-def remove_ground(filename, keep_lowest=False):
+def remove_ground(filename, attr, keep_lowest=False):
     """Precise ground removal, without hurting tree height (much).
     Operates by dividing the cloud into square columns col_w metres wide,
     and removes the bottom depth meters of each."""
-    attr = MapObj(pointcloudfile.read(filename))
     for point in pointcloudfile.read(filename):
         if attr.point_not_ground(point, keep_lowest):
             yield point
 
-def bin_trees(filename):
+def bin_trees(filename, attr):
     """Takes a forest, and returns a generator of point clouds.
     Each such subcloud of the forest is a tree.
     Holds all above-ground points in memory at maximum..."""
-    attr = MapObj(pointcloudfile.read(filename))
     features = [[] for _ in range(attr.len_components)]
     for point in pointcloudfile.read(filename):
         idx = attr.get_component_at(point)
         if idx is not None and attr.point_not_ground(point):
             features[idx].append(point)
-    return heuristic_tree_filter(features)
-
-def heuristic_tree_filter(cloud_list):
-    """A heuristic: which clouds in this list represent a tree?
-    Generator yields those that pass the heuristic.
-    """
-    while cloud_list:
-        t = list(cloud_list.pop())
+    while features:
+        t = list(features.pop())
         height = [m[2] for m in t]
         if len(t) > 50 and max(height) - min(height) > SLICE_DEPTH:
             yield t
 
 def offset_for(filename):
     """Return the (x, y, z) offset for a Pix4D .ply cloud."""
+    offset = filename[:-4] + '_ply_offset.xyz'
     if filename.endswith('_groundless.ply'):
         offset = filename[:-15] + '_ply_offset.xyz'
-    else:
-        offset = filename[:-4] + '_ply_offset.xyz'
     if not os.path.isfile(offset):
         return 0, 0, 0
     with open(offset) as f:
         return [float(n) for n in f.readline().split(' ')]
 
-def stream_analysis(fname, out):
+def stream_analysis(fname, attr, out):
     """Analysis of the forest, without allowing for point export or color
     analysis."""
     # NB: colours include ground points.
@@ -233,8 +224,6 @@ def stream_analysis(fname, out):
     form_str = ('{:.1f}, {:.1f}, {:.1f}, {:.1f}, {:.2f}, {:.2f}, '
                 '{:.3f}, {:.3f}, {:.3f}, {:.0f},\n')
     x_, y_, _ = offset_for(fname)
-    attr = MapObj(pointcloudfile.read(fname))
-    print('Got points, analysing...')
     for ID in range(attr.len_components):
         x, y, *rest = attr.tree_data(ID)
         lines.append(form_str.format(x+x_, y+y_, x, y, *rest))
@@ -251,10 +240,13 @@ if __name__ == '__main__':
                         help='directory for output files (optional)')
     args = parser.parse_args()
     if not os.path.isfile(args.file):
-        raise FileNotFoundError
+        raise FileNotFoundError(args.file)
     if not args.file.endswith('.ply'):
         raise ValueError('file must be a point cloud in .ply format')
     groundless = os.path.join(args.out, args.file[:-4] + '_groundless.ply')
-    pointcloudfile.write(remove_ground(args.file, True), groundless)
-    stream_analysis(groundless, '{}_analysis.csv'.format(args.file[:-4]))
+    attr_map = MapObj(pointcloudfile.read(args.file))
+    pointcloudfile.write(remove_ground(args.file, attr_map, True), groundless)
+    stream_analysis(groundless, attr_map,
+                     '{}_analysis.csv'.format(args.file[:-4]))
+    print('Done.')
 
