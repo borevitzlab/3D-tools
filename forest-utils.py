@@ -210,7 +210,6 @@ def offset_for(filename):
     offset = filename[:-4] + '_ply_offset.xyz'
     if '_groundless' in filename:
         offset = filename[:-15] + '_ply_offset.xyz'
-    print(offset)
     if not os.path.isfile(offset):
         return 0, 0, 0
     with open(offset) as f:

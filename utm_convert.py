@@ -55,7 +55,7 @@ def FootpointLatitude(y):
     alpha_ = 0.5 * (sm_a + sm_b) * (1 + n**2 / 4 + n**4 / 64)
     y_ = y / alpha_
     beta_ = 3 * n / 2 - 27 * n**3 / 32 + 269 * n**5 / 512
-    gamma_ = 1 * n**2 / 16 - 55 * n**4 / 32
+    gamma_ = 21 * n**2 / 16 - 55 * n**4 / 32
     delta_ = 151 * n**3 / 96 - 417 * n**5 / 128
     epsilon_ = 1097 * n**4 / 512
     return sum([y_,
@@ -125,7 +125,7 @@ def UTMXYToLatLon(x, y, zone, south):
         y -= 10000000
     y /= UTMScaleFactor
     # We need the central meridian of the UTM zone, in radians
-    c_merid = DegToRad(UTMCentralMeridian(zone))
+    c_merid = UTMCentralMeridian(zone)
     return MapXYToLatLon(x, y, c_merid)
 
 def UTM_to_LatLon(x, y, zone=55, south=True):
