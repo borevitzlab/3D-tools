@@ -73,30 +73,20 @@ def MapXYToLatLon(x, y, lambda_0):
         y - The northing of the point, in meters.
         lambda_0 - Longitude of the central meridian to be used, in radians.
     Outputs:
-        philambda_ - A 2-element containing the latitude and longitude
-    Remarks:
-        The local variables Nf, nuf2, tf, and tf2 serve the same purpose as
-        N, nu2, t, and t2 in MapLatLonToXY, but they are computed with respect
-        to the footpoint latitude phif.
-        x1frac, x2frac, x2poly, x3poly, etc. are to enhance readability and
-        to optimize computations.
+        a tuple of latitude and longitude
     '''
-    #Get the value of phif, the footpoint latitude
     phif = FootpointLatitude(y)
     ep2 = (sm_a**2 - sm_b**2) / sm_b**2
     cf = math.cos(phif)
     nuf2 = ep2 * cf**2
     Nf = sm_a**2 / (sm_b * (1 + nuf2)**0.5)
-    Nfpow = Nf
     tf = math.tan(phif)
-    tf2 = tf**2
-    tf4 = tf**4
     # Calculate fractional coefficients for x**n in the equations
     # below to simplify the expressions for latitude and longitude.
     frac = {
-        1: 1 / (Nfpow * cf),
+        1: 1 / (Nf * cf),
         2: tf / (2 * Nf**2),
-        3: 1 / (6 * Nf**3),
+        3: 1 / (6 * Nf**3 * cf),
         4: tf / (24 * Nf**4),
         5: 1 / (120 * Nf**5 * cf),
         6: tf / (720 * Nf**6),
@@ -106,43 +96,43 @@ def MapXYToLatLon(x, y, lambda_0):
     poly = {
         1: 1,
         2: -1 - nuf2,
-        3: -1 - 2 * tf2 - nuf2,
-        4: (5 + 3 * tf2 + 6 * nuf2 - 6 * tf2 * nuf2 -
-            3 * nuf2**2 - 9 * tf2 * nuf2**2),
-        5: 5 + 28 * tf2 + 24 * tf4 + 6 * nuf2 + 8 * tf2 * nuf2,
-        6: -61 - 90 * tf2 - 45 * tf4 - 107 * nuf2 + 162 * tf2 * nuf2,
-        7: -61 - 662 * tf2 - 1320 * tf4 - 720 * tf**6,
-        8: 1385 + 3633 * tf2 + 4095 * tf4 + 1575 * tf**6}
+        3: -1 - 2 * tf**2 - nuf2,
+        4: (5 + 3 * tf**2 + 6 * nuf2 - 6 * tf**2 * nuf2 -
+            3 * nuf2**2 - 9 * tf**2 * nuf2**2),
+        5: 5 + 28 * tf**2 + 24 * tf**4 + 6 * nuf2 + 8 * tf**2 * nuf2,
+        6: -61 - 90 * tf**2 - 45 * tf**4 - 107 * nuf2 + 162 * tf**2 * nuf2,
+        7: -61 - 662 * tf**2 - 1320 * tf**4 - 720 * tf**6,
+        8: 1385 + 3633 * tf**2 + 4095 * tf**4 + 1575 * tf**6}
     #Calculate latitude and longitude
     return (phif + sum((frac[n] * poly[n] * x**n for n in [2, 4, 6, 8])),
             lambda_0 + sum((frac[n] * poly[n] * x**n for n in [1, 3, 5, 7])))
 
-def UTMXYToLatLon(x, y, zone):
+def UTMXYToLatLon(x, y, zone, south):
     '''Converts x and y coordinates in the Universal Transverse Mercator
-    * projection to a latitude/longitude pair.
-    *
-    * Inputs:
-    *   x - The easting of the point, in meters.
-    *   y - The northing of the point, in meters.
-    *   zone - The UTM zone in which the point lies.
-    *   southhemi - True if the point is in the southern hemisphere
-    *               false otherwise.
-    *
-    * Outputs:
-    *   latlon - A 2-element array containing the latitude and
-    *            longitude of the point, in radians.
+    projection to a latitude/longitude pair.
+    Inputs:
+        x - The easting of the point, in meters.
+        y - The northing of the point, in meters.
+        zone - The UTM zone in which the point lies.
+        south - If the point is in the southern hemisphere
+    Outputs:
+       a tuple of latitude and longitude of the point, in radians
     '''
     x -= 500000
     x /= UTMScaleFactor
     #If in southern hemisphere, adjust y accordingly.
-    if True:
+    if south:
         y -= 10000000
     y /= UTMScaleFactor
     # We need the central meridian of the UTM zone, in radians
     c_merid = DegToRad(UTMCentralMeridian(zone))
     return MapXYToLatLon(x, y, c_merid)
 
+def UTM_to_LatLon(x, y, zone=55, south=True):
+    """Take xy values in UTM (default zone S55), and return lat and lon."""
+    return tuple([RadToDeg(n) for n in UTMXYToLatLon(x, y, zone, south)])
+
 if __name__ == '__main__':
-    a, b = (float(n) for n in input('What XY coords?    ').split())
-    print([RadToDeg(n) for n in UTMXYToLatLon(a, b, 55)])
+    a, b = (float(n) for n in input('What XY coords?  ').split())
+    print(UTM_to_LatLon(a, b))
 
