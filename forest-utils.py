@@ -182,7 +182,7 @@ class MapObj(object):
         return tuple(retval)
 
 
-def remove_ground(filename, attr, keep_lowest=False):
+def remove_ground(filename, attr, keep_lowest=True):
     """Precise ground removal, without hurting tree height (much).
     Operates by dividing the cloud into square columns col_w metres wide,
     and removes the bottom depth meters of each."""
@@ -208,8 +208,9 @@ def bin_trees(filename, attr):
 def offset_for(filename):
     """Return the (x, y, z) offset for a Pix4D .ply cloud."""
     offset = filename[:-4] + '_ply_offset.xyz'
-    if filename.endswith('_groundless.ply'):
+    if '_groundless' in filename:
         offset = filename[:-15] + '_ply_offset.xyz'
+    print(offset)
     if not os.path.isfile(offset):
         return 0, 0, 0
     with open(offset) as f:
@@ -246,9 +247,11 @@ if __name__ == '__main__':
     if not args.file.endswith('.ply'):
         raise ValueError('file must be a point cloud in .ply format')
     print('Working...')
-    groundless = os.path.join(args.out, args.file[:-4] + '_groundless.ply')
     attr_map = MapObj(pointcloudfile.read(args.file))
-    #pointcloudfile.write(remove_ground(args.file, attr_map, True), groundless)
+    groundless = args.file
+    if not '_groundless.ply' in args.file:
+        groundless = os.path.join(args.out, args.file[:-4] + '_groundless.ply')
+        pointcloudfile.write(remove_ground(args.file, attr_map), groundless)
     stream_analysis(groundless, attr_map,
                     '{}_analysis.csv'.format(args.file[:-4]))
     print('Done.')
