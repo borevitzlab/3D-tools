@@ -149,7 +149,7 @@ class MapObj(object):
     len_components = property(_get_len_components)
 
     def tree_data(self, tree_id):
-        """Return (ID, X, Y, height, area, mean_red, mean_green, mean_blue,
+        """Return (X, Y, height, area, mean_red, mean_green, mean_blue,
                    point_count)"""
         #pylint:disable=too-many-locals
         assert isinstance(tree_id, int)
@@ -157,26 +157,27 @@ class MapObj(object):
             raise ValueError('Given tree ID is out of range')
         retval = []
         keys = [k for k, v in self.trees.items() if v == tree_id]
+        small_keys = set()
+        for x, y in keys:
+            small_keys |= {(JOINED_CELLS*x+a, JOINED_CELLS*y+b)
+                           for a in range(JOINED_CELLS)
+                           for b in range(JOINED_CELLS)}
         retval.append((max(k[0] for k in keys) + min(k[0] for k in keys)) / 2)
         retval.append((max(k[1] for k in keys) + min(k[1] for k in keys)) / 2)
-        retval = [k/JOINED_CELLS for k in retval] # scale output
+        # Scale output correctly.  I have no idea where the 1.5 comes from...
+        retval = [1.5*k/JOINED_CELLS for k in retval]
         height = 0
         r, g, b = 0, 0, 0
         points = 0
-        for x, y in keys:
-            small_keys = ((JOINED_CELLS*x+a, JOINED_CELLS*y+b)
-                          for a in range(JOINED_CELLS)
-                          for b in range(JOINED_CELLS))
-            for k in small_keys:
-                height = max(height,
-                             self.canopy.get(k, 0) - self.ground.get(k, 0))
-                R, G, B = self.colours.get(k, (0, 0, 0))
-                r += R
-                g += G
-                b += B
-                points += self.density.get(k, 0)
+        for k in small_keys:
+            height = max(height, self.canopy.get(k, 0) - self.ground.get(k, 0))
+            R, G, B = self.colours.get(k, (0, 0, 0))
+            r += R
+            g += G
+            b += B
+            points += self.density.get(k, 0)
         retval.append(height)
-        retval.append(len(keys) * (CELL_SIZE * JOINED_CELLS) ** 2)
+        retval.append(len(small_keys) * CELL_SIZE**2)
         for c in (r, g, b):
             retval.append(c/points)
         retval.append(points)
@@ -219,8 +220,7 @@ def offset_for(filename):
 def stream_analysis(fname, attr, out):
     """Analysis of the forest, without allowing for point export or color
     analysis."""
-    # NB: colours include ground points.
-    # Until that's fixed, first reduce density to minimise impact.
+    #pylint:disable=too-many-locals,star-args
     lines = ['latitude, longitude, local_X, local_Y, height, area, '
              'mean_red, mean_green, mean_blue, point_count,\n']
     form_str = ('{}, {}, {:.1f}, {:.1f}, {:.2f}, {:.2f}, '
@@ -234,8 +234,8 @@ def stream_analysis(fname, attr, out):
     with open(out, 'w') as f:
         f.writelines(lines)
 
-
-if __name__ == '__main__':
+def get_args():
+    """Handle setup, parsing, and validation.  Return args object."""
     parser = argparse.ArgumentParser(
         description='Takes a .ply forest  point cloud; ' +
         'outputs attributes of each tree to .csv')
@@ -247,13 +247,23 @@ if __name__ == '__main__':
         raise FileNotFoundError(args.file)
     if not args.file.endswith('.ply'):
         raise ValueError('file must be a point cloud in .ply format')
+    return args
+
+def main_processing(args):
+    """Logic on which functions to call, and efficient order."""
     print('Working...')
-    attr_map = MapObj(pointcloudfile.read(args.file))
     groundless = args.file
-    if not '_groundless.ply' in args.file:
+    if not args.file.endswith('_groundless.ply'):
         groundless = os.path.join(args.out, args.file[:-4] + '_groundless.ply')
+    if os.path.isfile(groundless):
+        attr_map = MapObj(pointcloudfile.read(groundless))
+    else:
+        attr_map = MapObj(pointcloudfile.read(args.file))
         pointcloudfile.write(remove_ground(args.file, attr_map), groundless)
-    stream_analysis(groundless, attr_map,
-                    '{}_analysis.csv'.format(args.file[:-4]))
+    table = '{}_analysis.csv'.format(args.file[:-4].replace('_groundless', ''))
+    stream_analysis(groundless, attr_map, table)
     print('Done.')
+
+if __name__ == '__main__':
+    main_processing(get_args())
 
