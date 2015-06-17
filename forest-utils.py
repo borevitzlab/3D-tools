@@ -62,14 +62,15 @@ class MapObj(object):
         self.colours[idx] = (R+r, G+g, B+b)
 
     @staticmethod
-    def coords(pos):
+    def coords(pos, invert=False):
         """Return a tuple of integer coordinates as keys for the dict/map.
         * pos can be a full point tuple, or just (x, y)
-        * use floor() to avoid nasty float issues
-        * integer labels so we can do index-based stuff like finding neighbors
+        * use floor() to avoid imprecise float issues
+        invert goes from stored to true coordinates
         """
-        x, y, *_ = pos
-        return math.floor(x / CELL_SIZE), math.floor(y / CELL_SIZE)
+        if invert:
+            return pos[0] * CELL_SIZE, pos[1] * CELL_SIZE
+        return math.floor(pos[0] / CELL_SIZE), math.floor(pos[1] / CELL_SIZE)
 
     def point_not_ground(self, point, keep_lowest=False):
         """Returns boolean whether the point is not classified as ground - ie
@@ -89,14 +90,15 @@ class MapObj(object):
     def _tree_components(self):
         """Returns a dict where keys refer to connected components.
         NB:  use out.get(pos) to avoid KeyError for not-in-tree points."""
-        #pylint:disable=bad-whitespace,missing-docstring,too-many-branches
-        def neighbors(key):
-            return [(key[0]+a, key[1]+b) for a, b in {
-                (1,1), (1,0), (1,-1), (1,0), (0,1), (1,-1), (0,-1), (-1,-1)}]
+        #pylint:disable=too-many-branches
         def expand(old_key):
-            for key in neighbors(old_key):
+            """Implement depth-first search."""
+            neighbors = [(old_key[0]+a, old_key[1]+b) for a, b in
+                         {(1, 1), (1, 0), (1, -1), (1, 0),
+                          (0, 1), (1, -1), (0, -1), (-1, -1)}]
+            for key in neighbors:
                 if com.get(key) is None:
-                    # We never observed a point in that cell above GROUND_DEPTH
+                    # No above-ground point in that joined cell
                     return
                 if com[key] == com[old_key]:
                     continue
@@ -106,11 +108,18 @@ class MapObj(object):
                     com[key] = com[old_key]
                     expand(key)
 
+        # Set up a boolean array of larger keys to search
         non_ground = set()
+        key_scale_record = dict()
         for key in self.density.keys():
             if self.canopy[key] - self.ground[key] > SLICE_DEPTH:
                 cc_key = tuple(math.floor(k/JOINED_CELLS) for k in key)
+                if not cc_key in key_scale_record:
+                    key_scale_record[cc_key] = {key}
+                else:
+                    key_scale_record[cc_key].add(key)
                 non_ground.add(cc_key)
+        # Assign a unique integer value to each large key, then search
         com = dict()
         for idx, key in enumerate(non_ground):
             com[key] = idx
@@ -119,12 +128,18 @@ class MapObj(object):
                 expand(key)
             except RuntimeError:
                 # Recursion depth; finish on next pass.
-                pass
+                continue
+        # Reduce component labels to consecutive integers from zero
         out = dict()
         translate = dict((v, k) for k, v in enumerate(set(com.values())))
         for k, v in com.items():
             out[k] = translate[v]
-        return out
+        # Copy labels to grid of original scale
+        ret = dict()
+        for key, values in key_scale_record.items():
+            for skey in values:
+                ret[skey] = out[key]
+        return ret
 
     def _get_components(self):
         """Accessor to avoid recalculating the connected components unless
@@ -138,10 +153,7 @@ class MapObj(object):
 
     def get_component_at(self, point):
         """Get the component ID at a particular point; int>=0 or None"""
-        x, y, *_ = point
-        key = self.coords((x, y))
-        key = tuple(math.floor(k/JOINED_CELLS) for k in key)
-        return self.trees.get(key)
+        return self.trees.get(self.coords(point))
 
     def _get_len_components(self):
         """Returns the number of trees in the study area."""
@@ -149,39 +161,27 @@ class MapObj(object):
     len_components = property(_get_len_components)
 
     def tree_data(self, tree_id):
-        """Return (X, Y, height, area, mean_red, mean_green, mean_blue,
-                   point_count)"""
-        #pylint:disable=too-many-locals
+        """Yield X, Y, height, area, mean_red, mean_green, mean_blue, points"""
         assert isinstance(tree_id, int)
         if tree_id > self.len_components:
             raise ValueError('Given tree ID is out of range')
-        retval = []
         keys = [k for k, v in self.trees.items() if v == tree_id]
-        small_keys = set()
-        for x, y in keys:
-            small_keys |= {(JOINED_CELLS*x+a, JOINED_CELLS*y+b)
-                           for a in range(JOINED_CELLS)
-                           for b in range(JOINED_CELLS)}
-        retval.append((max(k[0] for k in keys) + min(k[0] for k in keys)) / 2)
-        retval.append((max(k[1] for k in keys) + min(k[1] for k in keys)) / 2)
-        # Scale output correctly.  I have no idea where the 1.5 comes from...
-        retval = [1.5*k/JOINED_CELLS for k in retval]
-        height = 0
-        r, g, b = 0, 0, 0
-        points = 0
-        for k in small_keys:
-            height = max(height, self.canopy.get(k, 0) - self.ground.get(k, 0))
-            R, G, B = self.colours.get(k, (0, 0, 0))
+        location = [self.coords(pos, True) for pos in keys]
+        yield (max(k[0] for k in location) + min(k[0] for k in location)) / 2
+        yield (max(k[1] for k in location) + min(k[1] for k in location)) / 2
+        height, r, g, b, points = 0, 0, 0, 0, 0
+        for k in keys:
+            height = max(height, self.canopy[k] - self.ground[k])
+            R, G, B = self.colours[k]
             r += R
             g += G
             b += B
-            points += self.density.get(k, 0)
-        retval.append(height)
-        retval.append(len(small_keys) * CELL_SIZE**2)
+            points += self.density[k]
+        yield height
+        yield len(keys) * CELL_SIZE**2
         for c in (r, g, b):
-            retval.append(c/points)
-        retval.append(points)
-        return tuple(retval)
+            yield c / points
+        yield points
 
 
 def remove_ground(filename, attr, keep_lowest=True):
