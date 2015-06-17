@@ -1,2 +1,2 @@
-py forest-utils.py densified_point_cloud_part_1.ply
+py forest-utils.py full_densified_point_cloud.ply
 pause
