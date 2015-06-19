@@ -207,30 +207,19 @@ def bin_trees(filename, attr):
         if len(t) > 50 and max(height) - min(height) > SLICE_DEPTH:
             yield t
 
-def offset_for(filename):
-    """Return the (x, y, z) offset for a Pix4D .ply cloud."""
-    offset = filename[:-4] + '_ply_offset.xyz'
-    if '_groundless' in filename:
-        offset = filename[:-15] + '_ply_offset.xyz'
-    if not os.path.isfile(offset):
-        return 0, 0, 0
-    with open(offset) as f:
-        return [float(n) for n in f.readline().split(' ')]
-
 def stream_analysis(fname, attr, out):
     """Analysis of the forest, without allowing for point export or color
     analysis."""
-    #pylint:disable=too-many-locals,star-args
+    #pylint:disable=too-many-locals
     lines = ['latitude, longitude, local_X, local_Y, height, area, '
              'mean_red, mean_green, mean_blue, point_count,\n']
     form_str = ('{}, {}, {:.1f}, {:.1f}, {:.2f}, {:.2f}, '
                 '{:.3f}, {:.3f}, {:.3f}, {:.0f},\n')
-    x_, y_, _ = offset_for(fname)
+    x_, y_, _ = pointcloudfile.offset_for(fname)
     for ID in range(attr.len_components):
         x, y, h, a, *rest = attr.tree_data(ID)
         lat, lon = UTM_to_LatLon(x+x_, y+y_)
-        if h > SLICE_DEPTH and a > (CELL_SIZE * JOINED_CELLS) ** 2:
-            lines.append(form_str.format(lat, lon, x, y, h, a, *rest))
+        lines.append(form_str.format(lat, lon, x, y, h, a, *rest))
     with open(out, 'w') as f:
         f.writelines(lines)
 
@@ -243,6 +232,7 @@ def get_args():
     parser.add_argument('out', nargs='?', default='.',
                         help='directory for output files (optional)')
     args = parser.parse_args()
+    # TODO:  remove as file locator becomes smarter?
     if not os.path.isfile(args.file):
         raise FileNotFoundError(args.file)
     if not args.file.endswith('.ply'):
@@ -252,10 +242,13 @@ def get_args():
 def main_processing(args):
     """Logic on which functions to call, and efficient order."""
     print('Working...')
+    # Set up name of output file, when input may be groundless or partial...
     groundless = os.path.join(args.out, os.path.basename(args.file))
     if not args.file.endswith('_groundless.ply'):
         groundless = os.path.join(
             args.out, os.path.basename(args.file)[:-4] + '_groundless.ply')
+    groundless = groundless.replace('_part_1', '')
+    # Execute main logic
     if os.path.isfile(groundless):
         attr_map = MapObj(pointcloudfile.read(groundless))
     else:

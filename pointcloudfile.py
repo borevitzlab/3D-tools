@@ -11,20 +11,59 @@ import struct
 import os.path
 from tempfile import SpooledTemporaryFile
 
+def offset_for(filename):
+    """Return the (x, y, z) offset for a Pix4D .ply cloud."""
+    offset = filename[:-4] + '_ply_offset.xyz'
+    if '_groundless' in filename:
+        offset = filename[:-15] + '_ply_offset.xyz'
+    if not os.path.isfile(offset):
+        return 0, 0, 0
+    with open(offset) as f:
+        return [float(n) for n in f.readline().split(' ')]
+
+def check_input(fname, ending=''):
+    """Checks that the file exists and has the right ending"""
+    if not os.path.isfile(fname):
+        raise FileNotFoundError(
+            'Cannot read points from a nonexistent file')
+    if not fname.endswith(ending):
+        raise ValueError('Tried to read file type {}, expected {}.'.format(
+            fname[-4:], ending))
+
 def read(fname):
     """Passes the file to a read function for that format."""
-    if not isinstance(fname, str):
-        raise TypeError('The filename to read must be a string!')
-    if not os.path.isfile(fname):
-        raise FileNotFoundError('Cannot read points from a nonexistent file')
-    if fname.endswith('.ply'):
-        return _read_ply(fname)
-    raise ValueError('Tried to read unsupported file type: ' + fname[-4:])
+    if fname.endswith('_point_cloud_part_1.ply'):
+        parts, p = [fname], 1
+        stub = fname.replace('_point_cloud_part_1.ply', '')
+        while True:
+            p += 1
+            part = stub + '_point_cloud_part_{}.ply'.format(p)
+            if os.path.isfile(part):
+                parts.append(part)
+            else:
+                return _read_pix4d_ply_parts(parts)
+    return _read_ply(fname)
+
+def _read_pix4d_ply_parts(fname_list):
+    """Read from a collection of ply files as if they were one file.
+    Pix4D usually exports point clouds in parts, with a UTM offset for the
+    origin.  We can thus read from all (though only write to one file."""
+    for f in fname_list:
+        check_input(f, '.ply')
+    first = fname_list.pop(0)
+    offset = offset_for(first)
+    for point in _read_ply(first):
+        yield point
+    for f in fname_list:
+        dx, dy, dz = [b - a for a, b in zip(offset, offset_for(f))]
+        for x, y, z, r, g, b in _read_ply(f):
+            yield x+dx, y+dy, z+dz, r, g, b
 
 def _read_ply(fname):
     """Opens the specified file, and returns a point set in the format required
     by attributes_from_cloud.  Currently a special case."""
     #pylint:disable=too-many-branches
+    check_input(fname, '.ply')
     f = open(fname, 'rb')
     raw_header = []
     while True:
@@ -35,10 +74,10 @@ def _read_ply(fname):
             break
     header = [line.strip().split(b' ') for line in raw_header]
     header = [(line[2], line[1]) for line in header if line[0] == b'property']
+    cols = {'r': b'red', 'g': b'green', 'b': b'blue'}
     if any(b' diffuse_' in l for l in raw_header):
-        cols = {'r': b'diffuse_red', 'g': b'diffuse_green', 'b': b'diffuse_blue'}
-    else:
-        cols = {'r': b'red', 'g': b'green', 'b': b'blue'}
+        cols = {'r': b'diffuse_red', 'g': b'diffuse_green',
+                'b': b'diffuse_blue'}
     if b'format ascii 1.0'+lineending in raw_header:
         head = {}
         for i, line in enumerate(header):
@@ -89,6 +128,7 @@ def write(cloud, fname):
     """Write the given cloud to disk."""
     binary = struct.Struct('<fffBBB')
     with SpooledTemporaryFile(max_size=2**20, mode='w+b') as temp_storage:
+        count = 0
         for count, point in enumerate(cloud, start=1):
             temp_storage.write(binary.pack(*point))
         temp_storage.seek(0)
