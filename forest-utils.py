@@ -252,15 +252,17 @@ def get_args():
 def main_processing(args):
     """Logic on which functions to call, and efficient order."""
     print('Working...')
-    groundless = args.file
+    groundless = os.path.join(args.out, os.path.basename(args.file))
     if not args.file.endswith('_groundless.ply'):
-        groundless = os.path.join(args.out, args.file[:-4] + '_groundless.ply')
+        groundless = os.path.join(
+            args.out, os.path.basename(args.file)[:-4] + '_groundless.ply')
     if os.path.isfile(groundless):
         attr_map = MapObj(pointcloudfile.read(groundless))
     else:
         attr_map = MapObj(pointcloudfile.read(args.file))
         pointcloudfile.write(remove_ground(args.file, attr_map), groundless)
-    table = '{}_analysis.csv'.format(args.file[:-4].replace('_groundless', ''))
+    table = '{}_analysis.csv'.format(
+        groundless[:-4].replace('_groundless', ''))
     stream_analysis(groundless, attr_map, table)
     print('Done.')
 
