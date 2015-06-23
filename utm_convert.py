@@ -64,6 +64,70 @@ def FootpointLatitude(y):
                 delta_ * math.sin(6 * y_),
                 epsilon_ * math.sin(8 * y_)])
 
+def MapLatLonToXY(phi, lambda_, lambda_0):
+    '''Converts a latitude/longitude pair to x and y coordinates in the
+    Transverse Mercator projection.  Note that Transverse Mercator is not
+    the same as UTM - a scale factor is required to convert between them.
+    Inputs:
+        phi - Latitude of the point, in radians.
+        lambda_ - Longitude of the point, in radians.
+        lambda_0 - Longitude of the central meridian to be used, in radians.
+    Outputs:
+        xy - A 2-element array containing the x and y coordinates
+             of the computed point.
+    '''
+    ep2 = (sm_a**2 - sm_b**2) / sm_b**2
+    nu2 = ep2 * math.cos(phi)**2
+    N = sm_a**2 / (sm_b * (1 + nu2)**0.5)
+    t = math.tan(phi)
+    l = lambda_ - lambda_0
+
+    #Precalculate coefficients for l**n in the equations below so humans
+    #can read the expressions for easting and northing
+    coef = {
+        1: 1,
+        2: 1,
+        3: 1 - t**2 + nu2,
+        4: 5 - t**2 + 9 * nu2 + 4 * nu2**2,
+        5: 5 - 18 * t**2 + t**4 + 14 * nu2 - 58 * t**2 * nu2,
+        6: 61 - 58 * t**2 + t**4 + 270 * nu2 - 330 * t**2 * nu2,
+        7: 61 - 479 * t**2 + 179 * t**4 - t**6,
+        8: 1385 - 3111 * t**2 + 543 * t**4 - t**6
+        }
+    frac = {
+        1: N,
+        2: t / 2 * N,
+        3: N / 6,
+        4: t / 24 * N,
+        5: N / 120,
+        6: t / 720 * N,
+        7: N / 5040,
+        8: t / 40320 * N
+        }
+    #Calculate easting and northing
+    x = sum(frac[n] * math.cos(phi)**n * coef[n] * l**n for n in [1, 3, 5, 7])
+    y = sum(frac[n] * math.cos(phi)**n * coef[n] * l**n for n in [2, 4, 6, 8])
+    return x, y + ArcLengthOfMeridian(phi)
+
+def LatLonToUTMXY(lat, lon):
+    '''Converts a latitude/longitude pair to x and y coordinates in the
+    Universal Transverse Mercator projection.
+    Inputs:
+        lat - Latitude of the point, in radians.
+        lon - Longitude of the point, in radians.
+    Outputs:
+        xy - A 2-element array where the UTM x and y values will be stored.
+        The UTM zone used for calculating the values of x and y.
+    '''
+    zone = int((RadToDeg(lon)+183) / 6)
+    x, y = MapLatLonToXY(lat, lon, UTMCentralMeridian(zone))
+    # Adjust easting and northing for UTM system
+    x = x * UTMScaleFactor + 500000
+    y *= UTMScaleFactor
+    if y < 0:
+        y += 10000000
+    return (x, y), zone
+
 def MapXYToLatLon(x, y, lambda_0):
     '''Converts x and y coordinates in the Transverse Mercator projection to
     a latitude/longitude pair.  Note that Transverse Mercator is not
@@ -104,8 +168,8 @@ def MapXYToLatLon(x, y, lambda_0):
         7: -61 - 662 * tf**2 - 1320 * tf**4 - 720 * tf**6,
         8: 1385 + 3633 * tf**2 + 4095 * tf**4 + 1575 * tf**6}
     #Calculate latitude and longitude
-    return (phif + sum((frac[n] * poly[n] * x**n for n in [2, 4, 6, 8])),
-            lambda_0 + sum((frac[n] * poly[n] * x**n for n in [1, 3, 5, 7])))
+    return (phif + sum(frac[n] * poly[n] * x**n for n in [2, 4, 6, 8]),
+            lambda_0 + sum(frac[n] * poly[n] * x**n for n in [1, 3, 5, 7]))
 
 def UTMXYToLatLon(x, y, zone, south):
     '''Converts x and y coordinates in the Universal Transverse Mercator
@@ -131,6 +195,10 @@ def UTMXYToLatLon(x, y, zone, south):
 def UTM_to_LatLon(x, y, zone=55, south=True):
     """Take xy values in UTM (default zone S55), and return lat and lon."""
     return tuple([RadToDeg(n) for n in UTMXYToLatLon(x, y, zone, south)])
+
+def LatLon_to_UTM(lat, lon):
+    """Take lat and lon in decimal degrees, and return UTM x, y, and zone."""
+    return LatLonToUTMXY(DegToRad(lat), DegToRad(lon))
 
 if __name__ == '__main__':
     a, b = (float(n) for n in input('What XY coords?  ').split())
