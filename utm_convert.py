@@ -1,8 +1,9 @@
 #!/usr/env/bin python3
-'''A library to convert UTM values to lat/lon values.
+"""A library to convert between Latitude/Longitude and UTM coordinates.
+
 Translated from the FOSS Javascript at
 http://home.hiwaay.net/~taylorc/toolbox/geography/geoutm.html
-'''
+"""
 
 import math
 
@@ -10,14 +11,6 @@ import math
 sm_a = 6378137
 sm_b = 6356752.314
 UTMScaleFactor = 0.9996
-
-def DegToRad(deg):
-    '''Converts degrees to radians.'''
-    return deg / 180 * math.pi
-
-def RadToDeg(rad):
-    '''Converts  radians to degrees.'''
-    return rad / math.pi * 180
 
 def ArcLengthOfMeridian(phi):
     '''Computes the ellipsoidal distance from the equator to a point at a
@@ -41,7 +34,7 @@ def ArcLengthOfMeridian(phi):
 
 def UTMCentralMeridian(zone):
     '''Determines the central meridian for the given UTM zone.'''
-    return DegToRad(int(zone)*6 - 183)
+    return math.radians(int(zone)*6 - 183)
 
 def FootpointLatitude(y):
     '''Computes the footpoint latitude for use in converting transverse
@@ -119,7 +112,7 @@ def LatLonToUTMXY(lat, lon):
         xy - A 2-element array where the UTM x and y values will be stored.
         The UTM zone used for calculating the values of x and y.
     '''
-    zone = int((RadToDeg(lon)+183) / 6)
+    zone = int((math.degrees(lon)+183) / 6)
     x, y = MapLatLonToXY(lat, lon, UTMCentralMeridian(zone))
     # Adjust easting and northing for UTM system
     x = x * UTMScaleFactor + 500000
@@ -194,11 +187,11 @@ def UTMXYToLatLon(x, y, zone, south):
 
 def UTM_to_LatLon(x, y, zone=55, south=True):
     """Take xy values in UTM (default zone S55), and return lat and lon."""
-    return tuple([RadToDeg(n) for n in UTMXYToLatLon(x, y, zone, south)])
+    return tuple([math.degrees(n) for n in UTMXYToLatLon(x, y, zone, south)])
 
 def LatLon_to_UTM(lat, lon):
     """Take lat and lon in decimal degrees, and return UTM x, y, and zone."""
-    return LatLonToUTMXY(DegToRad(lat), DegToRad(lon))
+    return LatLonToUTMXY(math.radians(lat), math.radians(lon))
 
 if __name__ == '__main__':
     a, b = (float(n) for n in input('What XY coords?  ').split())
