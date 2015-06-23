@@ -10,6 +10,10 @@ Returns generator objects, which yield points, due to out-of-memory issues.
 import struct
 import os.path
 from tempfile import SpooledTemporaryFile
+from collections import namedtuple
+
+# Global return type
+Point = namedtuple('Point', ['x', 'y', 'z', 'r', 'g', 'b'])
 
 def offset_for(filename):
     """Return the (x, y, z) offset for a Pix4D .ply cloud."""
@@ -82,13 +86,11 @@ def _read_ply(fname):
         head = {}
         for i, line in enumerate(header):
             head[line[0]] = (i, b'float' in line[1] or line[1] == b'double')
+            types = [float if s[1] else int for s in
+                     (b'x', b'y', b'z', cols['r'], cols['g'], cols['b'])]
         for line in f:
             point = line.strip().split(b' ')
-            out = tuple([float(point[head[s][0]]) if head[s][1]
-                         else int(point[head[s][0]])
-                         for s in (b'x', b'y', b'z',
-                                   cols['r'], cols['g'], cols['b'])])
-            yield out
+            yield Point(*[t(n) for t, n in zip(types, point)])
     else:
         head = [h[0] for h in header]
         idx = {'x':head.index(b'x'), 'y':head.index(b'y'), 'z':head.index(b'z'),
@@ -120,7 +122,7 @@ def _read_ply(fname):
         ind = (idx['x'], idx['y'], idx['z'], idx['r'], idx['g'], idx['b'])
         while raw:
             p_tup = point.unpack(raw)
-            yield tuple(p_tup[i] for i in ind)
+            yield Point(*[p_tup[i] for i in ind])
             raw = f.read(point.size)
     f.close()
 
