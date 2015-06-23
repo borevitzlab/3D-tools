@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-"""Tools for analysing forest point clouds.
-"""
+"""Tools for analysing forest point clouds."""
+
+# TODO: fix occasional classification of canopy as ground
+# TODO: refactor to split accumulation of data from analysis
+# TODO: improve colour accuracy
+# TODO: output UTM location
+# TODO: support persistent unique identifiers for each tree
 
 import argparse
 import math
@@ -8,6 +13,9 @@ import os
 
 import pointcloudfile
 from utm_convert import UTM_to_LatLon
+
+# Location, defaults to UTM zone 55
+UTM_ZONE = 55
 
 # Default to 10cm squares for analysis; optimum depends on cloud density
 CELL_SIZE = 0.1
@@ -48,18 +56,18 @@ class MapObj(object):
         self.count += 1
         x, y, z, r, g, b = point
         idx = self.coords((x, y))
+        R, G, B = self.colours.get(idx, (0, 0, 0))
+        self.colours[idx] = (R+r, G+g, B+b)
         if not self.density.get(idx):
             self.density[idx] = 1
             self.canopy[idx] = z
             self.ground[idx] = z
             return
         self.density[idx] += 1
-        if self.canopy[idx] < z:
-            self.canopy[idx] = z
         if self.ground[idx] > z:
             self.ground[idx] = z
-        R, G, B = self.colours.get(idx, (0, 0, 0))
-        self.colours[idx] = (R+r, G+g, B+b)
+        elif self.canopy[idx] < z:
+            self.canopy[idx] = z
 
     @staticmethod
     def coords(pos, invert=False):
@@ -184,42 +192,30 @@ class MapObj(object):
         yield points
 
 
-def remove_ground(filename, attr, keep_lowest=True):
+def remove_ground(filename, attr=None, keep_lowest=True):
     """Precise ground removal, without hurting tree height (much).
     Operates by dividing the cloud into square columns col_w metres wide,
     and removes the bottom depth meters of each."""
+    if attr is None:
+        attr = MapObj(pointcloudfile.read(filename))
     for point in pointcloudfile.read(filename):
         if attr.point_not_ground(point, keep_lowest):
             yield point
-
-def bin_trees(filename, attr):
-    """Takes a forest, and returns a generator of point clouds.
-    Each such subcloud of the forest is a tree.
-    Holds all above-ground points in memory at maximum..."""
-    features = [[] for _ in range(attr.len_components)]
-    for point in pointcloudfile.read(filename):
-        idx = attr.get_component_at(point)
-        if idx is not None and attr.point_not_ground(point):
-            features[idx].append(point)
-    while features:
-        t = list(features.pop())
-        height = [m[2] for m in t]
-        if len(t) > 50 and max(height) - min(height) > SLICE_DEPTH:
-            yield t
 
 def stream_analysis(fname, attr, out):
     """Analysis of the forest, without allowing for point export or color
     analysis."""
     #pylint:disable=too-many-locals
-    lines = ['latitude, longitude, local_X, local_Y, height, area, '
+    lines = ['latitude, longitude, UTM_X, UTM_Y, UTM_zone, height, area, '
              'mean_red, mean_green, mean_blue, point_count,\n']
     form_str = ('{}, {}, {:.1f}, {:.1f}, {:.2f}, {:.2f}, '
                 '{:.3f}, {:.3f}, {:.3f}, {:.0f},\n')
     x_, y_, _ = pointcloudfile.offset_for(fname)
     for ID in range(attr.len_components):
-        x, y, h, a, *rest = attr.tree_data(ID)
-        lat, lon = UTM_to_LatLon(x+x_, y+y_)
-        lines.append(form_str.format(lat, lon, x, y, h, a, *rest))
+        x, y, *rest = attr.tree_data(ID)
+        utm_x, utm_y = x+x_, y+y_
+        lat, lon = UTM_to_LatLon(utm_x, utm_y, UTM_ZONE)
+        lines.append(form_str.format(lat, lon, utm_x, utm_y, UTM_ZONE, *rest))
     with open(out, 'w') as f:
         f.writelines(lines)
 
