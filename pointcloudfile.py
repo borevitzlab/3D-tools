@@ -15,15 +15,16 @@ from collections import namedtuple
 # Global return type
 Point = namedtuple('Point', ['x', 'y', 'z', 'r', 'g', 'b'])
 
-def offset_for(filename):
+def UTM_offset_for(filename):
     """Return the (x, y, z) offset for a Pix4D .ply cloud."""
+    UTM_offset = namedtuple('UTM_offset', ['x', 'y', 'z'])
     offset = filename[:-4] + '_ply_offset.xyz'
     if '_groundless' in filename:
         offset = filename[:-15] + '_ply_offset.xyz'
     if not os.path.isfile(offset):
-        return 0, 0, 0
+        return UTM_offset(0, 0, 0)
     with open(offset) as f:
-        return [float(n) for n in f.readline().split(' ')]
+        return UTM_offset(*[float(n) for n in f.readline().strip().split(' ')])
 
 def check_input(fname, ending=''):
     """Checks that the file exists and has the right ending"""
@@ -55,11 +56,11 @@ def _read_pix4d_ply_parts(fname_list):
     for f in fname_list:
         check_input(f, '.ply')
     first = fname_list.pop(0)
-    offset = offset_for(first)
+    offset = UTM_offset_for(first)
     for point in _read_ply(first):
         yield point
     for f in fname_list:
-        dx, dy, dz = [b - a for a, b in zip(offset, offset_for(f))]
+        dx, dy, dz = [b - a for a, b in zip(offset, UTM_offset_for(f))]
         for x, y, z, r, g, b in _read_ply(f):
             yield x+dx, y+dy, z+dz, r, g, b
 
@@ -117,7 +118,7 @@ def _read_ply(fname):
             elif type_ == b'double':
                 form_str += 'd'
         point = struct.Struct(form_str)
-        # TODO: speed up reading.  larger chunks?
+        # TODO: speed up reading - struct.iter_unpack?
         raw = f.read(point.size)
         ind = (idx['x'], idx['y'], idx['z'], idx['r'], idx['g'], idx['b'])
         while raw:
