@@ -19,6 +19,8 @@ def UTM_offset_for(filename):
     if '_groundless' in filename:
         offset = filename[:-15] + '_ply_offset.xyz'
     if not os.path.isfile(offset):
+        offset = offset.replace('_ply_offset.xyz', '_part_1_ply_offset.xyz')
+    if not os.path.isfile(offset):
         return UTM_offset(0, 0, 0)
     with open(offset) as f:
         return UTM_offset(*[float(n) for n in f.readline().strip().split(' ')])
