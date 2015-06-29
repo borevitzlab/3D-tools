@@ -12,9 +12,6 @@ import os.path
 from tempfile import SpooledTemporaryFile
 from collections import namedtuple
 
-# Global return type
-Point = namedtuple('Point', ['x', 'y', 'z', 'r', 'g', 'b'])
-
 def UTM_offset_for(filename):
     """Return the (x, y, z) offset for a Pix4D .ply cloud."""
     UTM_offset = namedtuple('UTM_offset', ['x', 'y', 'z'])
@@ -69,63 +66,67 @@ def _read_ply(fname):
     by attributes_from_cloud.  Currently a special case."""
     #pylint:disable=too-many-branches
     check_input(fname, '.ply')
-    f = open(fname, 'rb')
-    raw_header = []
-    while True:
-        raw_header.append(next(f))
-        if raw_header[-1].startswith(b'end_header'):
-            # ply files can have basically any line ending...
-            lineending = raw_header[0].replace(b'ply', b'')
-            break
-    header = [line.strip().split(b' ') for line in raw_header]
-    header = [(line[2], line[1]) for line in header if line[0] == b'property']
-    cols = {'r': b'red', 'g': b'green', 'b': b'blue'}
-    if any(b' diffuse_' in l for l in raw_header):
-        cols = {'r': b'diffuse_red', 'g': b'diffuse_green',
-                'b': b'diffuse_blue'}
-    if b'format ascii 1.0'+lineending in raw_header:
-        head = {}
-        for i, line in enumerate(header):
-            head[line[0]] = (i, b'float' in line[1] or line[1] == b'double')
-            types = [float if s[1] else int for s in
-                     (b'x', b'y', b'z', cols['r'], cols['g'], cols['b'])]
-        for line in f:
-            point = line.strip().split(b' ')
-            yield Point(*[t(n) for t, n in zip(types, point)])
-    else:
-        head = [h[0] for h in header]
-        idx = {'x':head.index(b'x'), 'y':head.index(b'y'), 'z':head.index(b'z'),
-               'r':head.index(cols['r']), 'g':head.index(cols['g']),
-               'b':head.index(cols['b'])}
-        form_str = '<'
-        if b'format binary_big_endian 1.0'+lineending in raw_header:
-            form_str = '>'
-        for _, type_ in header:
-            if type_ == b'float':
-                form_str += 'f'
-            elif type_ == b'uchar':
-                form_str += 'B'
-            elif type_ == b'char':
-                form_str += 'b'
-            elif type_ == b'short':
-                form_str += 'h'
-            elif type_ == b'ushort':
-                form_str += 'H'
-            elif type_ == b'int':
-                form_str += 'i'
-            elif type_ == b'uint':
-                form_str += 'I'
-            elif type_ == b'double':
-                form_str += 'd'
-        point = struct.Struct(form_str)
-        # TODO: speed up reading - struct.iter_unpack?
-        raw = f.read(point.size)
-        ind = (idx['x'], idx['y'], idx['z'], idx['r'], idx['g'], idx['b'])
-        while raw:
-            p_tup = point.unpack(raw)
-            yield Point(*[p_tup[i] for i in ind])
+    with open(fname, 'rb') as f:
+        raw_header = []
+        while True:
+            raw_header.append(next(f))
+            if raw_header[-1].startswith(b'end_header'):
+                # ply files can have basically any line ending...
+                lineending = raw_header[0].replace(b'ply', b'')
+                break
+        header = [line.strip().split(b' ') for line in raw_header]
+        header = [(line[2], line[1]) for line in header if line[0] == b'property']
+        cols = {'r': b'red', 'g': b'green', 'b': b'blue'}
+        if any(b' diffuse_' in l for l in raw_header):
+            cols = {'r': b'diffuse_red', 'g': b'diffuse_green',
+                    'b': b'diffuse_blue'}
+        if b'format ascii 1.0'+lineending in raw_header:
+            head = {}
+            for i, line in enumerate(header):
+                head[line[0]] = (i, b'float' in line[1] or line[1] == b'double')
+                types = [float if s[1] else int for s in
+                         (b'x', b'y', b'z', cols['r'], cols['g'], cols['b'])]
+            for line in f:
+                point = line.strip().split(b' ')
+                yield Point(*[t(n) for t, n in zip(types, point)])
+        else:
+            head = [h[0] for h in header]
+            idx = {'x':head.index(b'x'), 'y':head.index(b'y'), 'z':head.index(b'z'),
+                   'r':head.index(cols['r']), 'g':head.index(cols['g']),
+                   'b':head.index(cols['b'])}
+            form_str = '<'
+            if b'format binary_big_endian 1.0'+lineending in raw_header:
+                form_str = '>'
+            for _, type_ in header:
+                if type_ == b'float':
+                    form_str += 'f'
+                elif type_ == b'uchar':
+                    form_str += 'B'
+                elif type_ == b'char':
+                    form_str += 'b'
+                elif type_ == b'short':
+                    form_str += 'h'
+                elif type_ == b'ushort':
+                    form_str += 'H'
+                elif type_ == b'int':
+                    form_str += 'i'
+                elif type_ == b'uint':
+                    form_str += 'I'
+                elif type_ == b'double':
+                    form_str += 'd'
+            point = struct.Struct(form_str)
             raw = f.read(point.size)
-    f.close()
+            ind = (idx['x'], idx['y'], idx['z'], idx['r'], idx['g'], idx['b'])
+            if ind == tuple(range(6)):
+                while raw:
+                    p_tup = point.unpack(raw)
+                    yield p_tup
+                    raw = f.read(point.size)
+            else:
+                while raw:
+                    p_tup = point.unpack(raw)
+                    yield tuple(p_tup[i] for i in ind)
+                    raw = f.read(point.size)
 
 def write(cloud, fname):
     """Write the given cloud to disk."""
