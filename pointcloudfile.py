@@ -16,10 +16,6 @@ def UTM_offset_for(filename):
     """Return the (x, y, z) offset for a Pix4D .ply cloud."""
     UTM_offset = namedtuple('UTM_offset', ['x', 'y', 'z'])
     offset = filename[:-4] + '_ply_offset.xyz'
-    if '_groundless' in filename:
-        offset = filename[:-15] + '_ply_offset.xyz'
-    if not os.path.isfile(offset):
-        offset = offset.replace('_ply_offset.xyz', '_part_1_ply_offset.xyz')
     if not os.path.isfile(offset):
         return UTM_offset(0, 0, 0)
     with open(offset) as f:

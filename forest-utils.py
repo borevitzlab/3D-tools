@@ -5,7 +5,8 @@
 
 import argparse
 import math
-import os
+import os.path
+import shutil
 
 import pointcloudfile
 from utm_convert import UTM_to_LatLon
@@ -179,16 +180,19 @@ class MapObj(object):
         for v in set(self.trees.values()):
             yield self.tree_data(keys[v])
 
-def remove_ground(filename, attr=None, keep_lowest=True):
-    """Precise ground removal, without hurting tree height (much).
-    Operates by dividing the cloud into square columns col_w metres wide,
-    and removes the bottom depth meters of each."""
+def make_sparse(filename, attr=None, *, keep_lowest=True, keep_canopy=True):
+    """Yield points for a sparse point cloud.
+    By default, it keeps both canopy points and the equal lowest points in each
+    grid cell; eliminating ~3/4 of all points without affecting analysis.  It
+    can also keep canopy only or lowest only."""
+    if not keep_lowest and not keep_canopy:
+        raise StopIteration
     if attr is None:
         attr = MapObj(filename, colours=False)
     if attr.file != filename:
         raise ValueError('Supplied attributes are for a different file.')
     for point in pointcloudfile.read(filename):
-        if not attr.is_ground(point):
+        if keep_canopy and not attr.is_ground(point):
             yield point
         elif keep_lowest and attr.is_lowest(point):
             yield point
@@ -221,18 +225,21 @@ def get_args():
 def main_processing(args):
     """Logic on which functions to call, and efficient order."""
     print('Reading from "{}" ...'.format(args.file))
-    groundless = os.path.join(args.out, os.path.basename(args.file))
-    if not args.file.endswith('_groundless.ply'):
-        groundless = os.path.join(
-            args.out, os.path.basename(args.file)[:-4] + '_groundless.ply')
-    groundless = groundless.replace('_part_1', '')
-    if os.path.isfile(groundless):
-        attr_map = MapObj(groundless)
+    sparse = os.path.join(args.out, os.path.basename(args.file))
+    if not args.file.endswith('_sparse.ply'):
+        sparse = os.path.join(
+            args.out, os.path.basename(args.file)[:-4] + '_sparse.ply')
+    sparse = sparse.replace('_part_1', '')
+    if os.path.isfile(sparse):
+        attr_map = MapObj(sparse)
     else:
         attr_map = MapObj(args.file)
-        pointcloudfile.write(remove_ground(args.file, attr_map), groundless)
-    print('Done reading, starting analysis...')
-    table = '{}_analysis.csv'.format(groundless[:-4].replace('_groundless', ''))
+        pointcloudfile.write(make_sparse(args.file, attr_map), sparse)
+        shutil.copy(pointcloudfile.UTM_offset_for(args.file),
+                    sparse[:-4] + '_ply_offset.xyz')
+    print('Read {} points into {} cells, starting analysis...'.format(
+        len(attr_map), len(attr_map.canopy)))
+    table = '{}_analysis.csv'.format(sparse[:-4].replace('_sparse', ''))
     stream_analysis(attr_map, table)
     print('Done.')
 
