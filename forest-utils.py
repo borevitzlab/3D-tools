@@ -117,7 +117,6 @@ class MapObj(object):
                     expand(key)
 
         # Set up a boolean array of larger keys to search
-        non_ground = set()
         key_scale_record = dict()
         for key in self.density.keys():
             if self.canopy[key] - self.ground[key] > SLICE_DEPTH:
@@ -126,10 +125,9 @@ class MapObj(object):
                     key_scale_record[cc_key] = {key}
                 else:
                     key_scale_record[cc_key].add(key)
-                non_ground.add(cc_key)
         # Assign a unique integer value to each large key, then search
         com = dict()
-        for idx, key in enumerate(non_ground):
+        for idx, key in enumerate(tuple(key_scale_record)):
             com[key] = idx
         for key in com.keys():
             try:
@@ -160,10 +158,8 @@ class MapObj(object):
         height, r, g, b, points = 0, 0, 0, 0, 0
         for k in keys:
             height = max(height, self.canopy[k] - self.ground[k])
-            R, G, B = self.colours.get(k, (0, 0, 0))
-            r += R
-            g += G
-            b += B
+            r, g, b = (a+b for a, b in zip(
+                [r, g, b], self.colours.get(k, [0, 0, 0])))
             points += self.density[k]
         out.extend([height, len(keys) * CELL_SIZE**2,
                     r // points, g // points, b // points, points])
@@ -232,13 +228,20 @@ def main_processing(args):
     sparse = sparse.replace('_part_1', '')
     if os.path.isfile(sparse):
         attr_map = MapObj(sparse)
+        print('Read {} points into {} cells'.format(
+            len(attr_map), len(attr_map.canopy)))
     else:
-        attr_map = MapObj(args.file)
+        attr_map = MapObj(args.file, colours=False)
+        print('Read {} points into {} cells, writing "{}" ...'.format(
+            len(attr_map), len(attr_map.canopy), sparse))
         pointcloudfile.write(make_sparse(args.file, attr_map), sparse)
-        shutil.copy(pointcloudfile.UTM_offset_for(args.file),
-                    sparse[:-4] + '_ply_offset.xyz')
-    print('Read {} points into {} cells, starting analysis...'.format(
-        len(attr_map), len(attr_map.canopy)))
+        if os.path.isfile(args.file[:-4] + '_ply_offset.xyz'):
+            shutil.copy(args.file[:-4] + '_ply_offset.xyz',
+                        sparse[:-4] + '_ply_offset.xyz')
+        attr_map.file = sparse
+        print('Reading colours from ' + sparse)
+        attr_map.update_colours()
+    print('File IO complete, starting analysis...')
     table = '{}_analysis.csv'.format(sparse[:-4].replace('_sparse', ''))
     stream_analysis(attr_map, table)
     print('Done.')
