@@ -60,7 +60,7 @@ class MapObj(object):
                 self.ground[idx] = z
             elif self.canopy[idx] < z:
                 self.canopy[idx] = z
-        # TODO: smooth ground map here to avoid canopy misclassification
+        self.__smooth_ground()
         self.trees = self._tree_components()
 
     def update_colours(self):
@@ -95,16 +95,56 @@ class MapObj(object):
             return 0
         return sum(self.density.values())
 
+    @staticmethod
+    def _neighbors(key):
+        """Return the adjacent keys, whether they exist or not."""
+        return ((key[0]+a, key[1]+b) for a, b in
+                [(1, 1), (1, 0), (1, -1),
+                 (0, 1), (0, -1),
+                 (-1, 1), (-1, 0), (-1, -1)])
+
+    def __problematic(self, prior=None):
+        """Identifies cells with more than 2:1 slope to 3+ adjacent cells."""
+        problematic = set()
+        if prior is None:
+            prior = self.ground.keys()
+        for k in prior:
+            adjacent = {self.ground.get(n) for n in self._neighbors(k)}
+            adjacent.discard(None)
+            if len(adjacent) < 6:
+                continue
+            height = self.ground[k]
+            OK = 3 > sum(abs(height - n) > 2*CELL_SIZE for n in adjacent)
+            if not OK:
+                problematic.add(k)
+        return problematic
+
+    def __smooth_ground(self):
+        """Smooths the ground map, to reduce misclassification of canopy as
+        ground, and reduce the impact of spurious points."""
+        problematic = self.__problematic()
+        p1 = len(problematic)
+        for _ in range(10):
+            # Smooth problematic cells where practical
+            for key in problematic:
+                adjacent = {self.ground.get(n) for n in self._neighbors(key)
+                            if not n in problematic}
+                adjacent.discard(None)
+                if not adjacent:
+                    continue
+                self.ground[key] = min(adjacent) + 2*CELL_SIZE
+            p2 = len(problematic)
+            problematic = self.__problematic(problematic)
+            if p2/p1 < 0.2 or p2/len(problematic) > 0.8:
+                break
+
     def _tree_components(self):
         """Returns a dict where keys refer to connected components.
-        NB:  use out.get(pos) to avoid KeyError for not-in-tree points."""
+        NB: Not all keys in other dicts exist in this output."""
         #pylint:disable=too-many-branches
         def expand(old_key):
             """Implement depth-first search."""
-            neighbors = [(old_key[0]+a, old_key[1]+b) for a, b in
-                         {(1, 1), (1, 0), (1, -1), (1, 0),
-                          (0, 1), (1, -1), (0, -1), (-1, -1)}]
-            for key in neighbors:
+            for key in self._neighbors(old_key):
                 if com.get(key) is None:
                     # No above-ground point in that joined cell
                     return
@@ -199,7 +239,7 @@ def stream_analysis(attr, out):
                 '{:.3f}, {:.3f}, {:.3f}, {},\n')
     with open(out, 'w') as f:
         f.write('latitude, longitude, UTM_X, UTM_Y, UTM_zone, height, area, '
-                'mean_red, mean_green, mean_blue, point_count,\n')
+                'red, green, blue, point_count,\n')
         for data in attr.all_trees():
             f.write(form_str.format(*data))
 
