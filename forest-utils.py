@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Tools for analysing forest point clouds."""
 
-# TODO: support persistent unique identifiers for each tree
-
 import argparse
 import math
 import os.path
@@ -142,7 +140,7 @@ class MapObj(object):
         """Returns a dict where keys refer to connected components.
         NB: Not all keys in other dicts exist in this output."""
         #pylint:disable=too-many-branches
-        def expand(old_key):
+        def expand(old_key, com):
             """Implement depth-first search."""
             for key in self._neighbors(old_key):
                 if com.get(key) is None:
@@ -154,7 +152,7 @@ class MapObj(object):
                     com[old_key] = com[key]
                 else:
                     com[key] = com[old_key]
-                    expand(key)
+                    expand(key, com)
 
         # Set up a boolean array of larger keys to search
         key_scale_record = dict()
@@ -169,9 +167,9 @@ class MapObj(object):
         com = dict()
         for idx, key in enumerate(tuple(key_scale_record)):
             com[key] = idx
-        for key in com.keys():
+        for key in tuple(com):
             try:
-                expand(key)
+                expand(key, com)
             except RuntimeError:
                 # Recursion depth; finish on next pass.
                 continue
@@ -233,14 +231,21 @@ def make_sparse(filename, attr=None, *, keep_lowest=True, keep_canopy=True):
         elif keep_lowest and attr.is_lowest(point):
             yield point
 
+def match_across_takes(trees, previous_trees=None):
+    """Applies ID strings to trees based on a previous dataset."""
+    if previous_trees is None:
+        return [['unknown'] + list(t) for t in trees]
+    # TODO: implement this once a second dataset is available.
+    raise NotImplementedError('Cannot import names from nonexistent data.')
+
 def stream_analysis(attr, out):
     """Saves the list of trees with attributes to the file 'out'."""
-    form_str = ('{}, {}, {:.1f}, {:.1f}, {}, {:.2f}, {:.2f}, '
-                '{:.3f}, {:.3f}, {:.3f}, {},\n')
+    form_str = '"{}",{},{},{:.1f},{:.1f},{},{:.2f},{:.2f},{},{},{},{},\n'
+    trees = match_across_takes(attr.all_trees(), None)
     with open(out, 'w') as f:
-        f.write('latitude, longitude, UTM_X, UTM_Y, UTM_zone, height, area, '
-                'red, green, blue, point_count,\n')
-        for data in attr.all_trees():
+        f.write('name (ID), latitude, longitude, UTM_X, UTM_Y, UTM_zone, '
+                'height, area, red, green, blue, point_count,\n')
+        for data in trees:
             f.write(form_str.format(*data))
 
 def get_args():
