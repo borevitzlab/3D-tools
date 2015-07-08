@@ -9,22 +9,6 @@ import shutil
 import pointcloudfile
 from utm_convert import UTM_to_LatLon
 
-# Location, defaults to UTM zone 55
-UTM_ZONE = 55
-
-# Default to 10cm squares for analysis; optimum depends on cloud density
-CELL_SIZE = 0.1
-
-# Classifies anything in the lowest GROUND_DEPTH in CELL_SIZE as ground
-GROUND_DEPTH = 0.2
-
-# SLICE_DEPTH is used in the connected component checks; max width of canopy
-# will be >= this.
-SLICE_DEPTH = 0.6
-
-# The component analysis uses cells JOINED_CELLS * CELL_SIZE on each side
-JOINED_CELLS = 4
-
 
 class MapObj(object):
     """Stores a maximum and minimum height map of the cloud, in GRID_SIZE
@@ -75,13 +59,15 @@ class MapObj(object):
         """Return a tuple of integer coordinates as keys for the dict/map.
         * pos can be a full point tuple, or just (x, y)
         * use floor() to avoid imprecise float issues"""
-        return math.floor(pos[0] / CELL_SIZE), math.floor(pos[1] / CELL_SIZE)
+        x = math.floor(pos[0] / args.cellsize)
+        y = math.floor(pos[1] / args.cellsize)
+        return x, y
 
     def is_ground(self, point):
         """Returns boolean whether the point is not classified as ground - ie
         True if within GROUND_DEPTH of the lowest point in the cell.
         If not lossy, also true for lowest ground point in a cell."""
-        return point[2] - self.ground[self.coords(point)] < GROUND_DEPTH
+        return point[2] - self.ground[self.coords(point)] < args.grounddepth
 
     def is_lowest(self, point):
         """Returns boolean whether the point is lowest in that grid cell."""
@@ -112,28 +98,26 @@ class MapObj(object):
             if len(adjacent) < 6:
                 continue
             height = self.ground[k]
-            OK = 3 > sum(abs(height - n) > 2*CELL_SIZE for n in adjacent)
+            OK = 3 > sum(abs(height - n) > 2*args.cellsize for n in adjacent)
             if not OK:
                 problematic.add(k)
         return problematic
 
     def __smooth_ground(self):
-        """Smooths the ground map, to reduce misclassification of canopy as
-        ground, and reduce the impact of spurious points."""
+        """Smooths the ground map, to reduce the impact of spurious points, eg.
+        points far underground or misclassification of canopy as ground."""
         problematic = self.__problematic()
-        p1 = len(problematic)
-        for _ in range(10):
-            # Smooth problematic cells where practical
+        for _ in range(100):
             for key in problematic:
                 adjacent = {self.ground.get(n) for n in self._neighbors(key)
                             if not n in problematic}
                 adjacent.discard(None)
                 if not adjacent:
                     continue
-                self.ground[key] = min(adjacent) + 2*CELL_SIZE
-            p2 = len(problematic)
+                self.ground[key] = min(adjacent) + 2*args.cellsize
+            prev = len(problematic)
             problematic = self.__problematic(problematic)
-            if p2/p1 < 0.2 or p2/len(problematic) > 0.8:
+            if prev / len(problematic) > 0.9:
                 break
 
     def _tree_components(self):
@@ -144,7 +128,6 @@ class MapObj(object):
             """Implement depth-first search."""
             for key in self._neighbors(old_key):
                 if com.get(key) is None:
-                    # No above-ground point in that joined cell
                     return
                 if com[key] == com[old_key]:
                     continue
@@ -157,8 +140,8 @@ class MapObj(object):
         # Set up a boolean array of larger keys to search
         key_scale_record = dict()
         for key in self.density.keys():
-            if self.canopy[key] - self.ground[key] > SLICE_DEPTH:
-                cc_key = tuple(math.floor(k/JOINED_CELLS) for k in key)
+            if self.canopy[key] - self.ground[key] > args.slicedepth:
+                cc_key = tuple(math.floor(k/args.joinedcells) for k in key)
                 if not cc_key in key_scale_record:
                     key_scale_record[cc_key] = {key}
                 else:
@@ -173,6 +156,7 @@ class MapObj(object):
             except RuntimeError:
                 # Recursion depth; finish on next pass.
                 continue
+# TODO:  merge multiple parts of each short tree here
         # Reduce component labels to consecutive integers from zero
         out = dict()
         translate = dict((v, k) for k, v in enumerate(set(com.values())))
@@ -188,18 +172,18 @@ class MapObj(object):
     def tree_data(self, keys):
         """Lat, Lon UTM X, UTM Y, height, area, red, green, blue, points."""
         x = self.offset.x + (max(k[0] for k in keys) +
-                             min(k[0] for k in keys)) * CELL_SIZE / 2
+                             min(k[0] for k in keys)) * args.cellsize / 2
         y = self.offset.y + (max(k[1] for k in keys) +
-                             min(k[1] for k in keys)) * CELL_SIZE / 2
-        out = list(UTM_to_LatLon(x, y, UTM_ZONE))
-        out.extend([x, y, UTM_ZONE])
+                             min(k[1] for k in keys)) * args.cellsize / 2
+        out = list(UTM_to_LatLon(x, y, args.utmzone))
+        out.extend([x, y, args.utmzone])
         height, r, g, b, points = 0, 0, 0, 0, 0
         for k in keys:
             height = max(height, self.canopy[k] - self.ground[k])
             r, g, b = (a+b for a, b in zip(
                 [r, g, b], self.colours.get(k, [0, 0, 0])))
             points += self.density[k]
-        out.extend([height, len(keys) * CELL_SIZE**2,
+        out.extend([height, len(keys) * args.cellsize**2,
                     r // points, g // points, b // points, points])
         return tuple(out)
 
@@ -249,21 +233,38 @@ def stream_analysis(attr, out):
             f.write(form_str.format(*data))
 
 def get_args():
-    """Handle setup, parsing, and validation.  Return args object."""
+    """Handle command-line arguments, including default values."""
     parser = argparse.ArgumentParser(
-        description='Takes a .ply forest  point cloud; ' +
-        'outputs attributes of each tree to .csv')
-    parser.add_argument('file', help='name of the file to process')
-    parser.add_argument('out', nargs='?', default='.',
-                        help='directory for output files (optional)')
-    args = parser.parse_args()
-    if not os.path.isfile(args.file):
-        raise FileNotFoundError(args.file)
-    if not args.file.endswith('.ply'):
-        raise ValueError('file must be a point cloud in .ply format')
-    return args
+        description=('Takes a .ply forest  point cloud; outputs a sparse point'
+                     'cloud and a .csv file of attributes for each tree.'))
+    parser.add_argument(
+        'file', help='name of the file to process')
+    parser.add_argument(
+        'out', default='.', nargs='?',
+        help='directory for output files (optional)')
+    parser.add_argument( #analysis scale
+        '--cellsize', default=0.1, nargs='?',
+        help='grid scale; optimal at ~10x point spacing')
+    parser.add_argument( #georeferenced location
+        '--utmzone', default=55, nargs='?',
+        help='the UTM coordinate zone for georeferencing')
+    parser.add_argument( #feature extraction
+        '--joinedcells', default=4, nargs='?',
+        help='use cells X times larger to detect gaps between trees')
+    parser.add_argument( #feature extraction
+        '--slicedepth', default=0.6, nargs='?',
+        help='max tree width >= this for feature extraction')
+    parser.add_argument( #feature classification
+        '--grounddepth', default=0.2, nargs='?',
+        help='depth to omit from sparse point cloud')
+    return parser.parse_args()
 
-def main_processing(args):
+# args are globally available
+args = get_args()
+if not os.path.isfile(args.file):
+    raise FileNotFoundError(args.file)
+
+def main_processing():
     """Logic on which functions to call, and efficient order."""
     print('Reading from "{}" ...'.format(args.file))
     sparse = os.path.join(args.out, os.path.basename(args.file))
@@ -292,5 +293,5 @@ def main_processing(args):
     print('Done.')
 
 if __name__ == '__main__':
-    main_processing(get_args())
+    main_processing()
 
