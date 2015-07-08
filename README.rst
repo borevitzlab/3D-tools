@@ -9,31 +9,44 @@ attributes, automation of data processing, etc.
 forest-utils.py
 ===============
 Analyses a point cloud representing a forest; outputs an attribute table
-with xy coordinates, height, colour indices, and (in future) various other
-data.
+with location, size, colour, and point coverage.  A "sparse" point cloud is
+also created, which preserves all trees but reduces ground point density to
+only the lowest point in each (10cm) grid cell.
 
-A key design principle is robustness over large files; this is achieved by
-making minimal assumptions and processing a stream instead of loading too much
-into memory where various accumulators will do.  Both are a work in progress,
-but reliable on the ~33M point datasets tested so far.
+Extensive use of mutable coordinate-property mappings and streamed input
+ensure that even files to large to load in memory can be processed.  In extreme
+cases, the resolution can be decreased to trade accuracy for memory.
 
-Performance is desired only to a degree that does not decrease readability;
-processing images to points takes several hours and this tool only a few
-minutes.
-
+Here's a map made from example output: 
+https://www.google.com/maps/d/viewer?mid=z1pH7HaTWL9Q.kzQflQGYVRIU
 
 pointcloudfile.py
 =================
-A simple compatibility layer for dealign with point cloud files; this provides
+A simple compatibility layer for dealing with point cloud files; this provides
 two general methods.
 
 In all cases a "point" is tuple of (x, y, z, r, g, b).  XYZ are floats denoting
 spatial coordinates.  RGB is the color, each an int between 0 and 255 inclusive.
 
 ``read(filename)`` returns a generator of points.  ``*.ply`` files are currently
-supported, but other formats are planned.
+supported, but other formats are planned.  ``.ply`` files exported from Pix4D
+have some special handling to combine multi-file point clouds, and preserve
+correct georeferencing.
 
-``write(cloud, filename, count=None)`` writes the supplied points to
-``filename`` in binary ``.ply`` format.  ``cloud`` must be an iterable of
-points, and if ``count`` (the number of points) is not supplied will be
-converted to a list as the format requires point count in the header.
+``write(cloud, filename)`` writes the supplied points to ``filename`` in
+binary ``.ply`` format.  ``cloud`` must be an iterable of points.
+
+utm_convert.py
+==============
+A library to convert co-ordinates between the Universial Tranverse Mercator
+projection, and WGSM84 (GPS-projection) latitude and longitude in decimal
+degrees - in either direction.
+
+The UTM system is nice in that it uses eastings, northings, and altitude in
+metres - which is really good for local use.  Pix4D exports geolocation in
+this format.  Lat/Lon degrees are a common standard for georeferencing, and
+often an easier interface for other software.
+
+This module is a translation of `Chuck Taylor's Javascript version 
+<http://home.hiwaay.net/~taylorc/toolbox/geography/geoutm.html>`_ to idiomatic
+Python.  Floating-point imprecision is negligible; a few microns per cycle.
