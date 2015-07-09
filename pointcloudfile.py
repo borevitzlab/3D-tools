@@ -12,14 +12,16 @@ import os.path
 from tempfile import SpooledTemporaryFile
 from collections import namedtuple
 
-def UTM_offset_for(filename):
+UTM_offset = namedtuple('UTM_offset', ['x', 'y', 'z', 'zone'])
+
+def UTM_offset_for(filename, zone=55):
     """Return the (x, y, z) offset for a Pix4D .ply cloud."""
-    UTM_offset = namedtuple('UTM_offset', ['x', 'y', 'z'])
     offset = filename[:-4] + '_ply_offset.xyz'
     if not os.path.isfile(offset):
-        return UTM_offset(0, 0, 0)
+        return UTM_offset(0, 0, 0, zone)
     with open(offset) as f:
-        return UTM_offset(*[float(n) for n in f.readline().strip().split(' ')])
+        x, y, z = (float(n) for n in f.readline().strip().split(' '))
+        return UTM_offset(x, y, z, zone)
 
 def check_input(fname, ending=''):
     """Checks that the file exists and has the right ending"""
@@ -61,8 +63,9 @@ def _read_pix4d_ply_parts(fname_list):
 
 def _read_ply(fname):
     """Opens the specified file, and returns a point set in the format required
-    by attributes_from_cloud.  Currently a special case."""
-    #pylint:disable=too-many-branches
+    by attributes_from_cloud.  Only handles xyzrgb point clouds, but that's
+    a fine subset of the format.  See http://paulbourke.net/dataformats/ply/"""
+    #pylint:disable=too-many-branches,too-many-locals,too-many-statements
     check_input(fname, '.ply')
     with open(fname, 'rb') as f:
         raw_header = []
@@ -73,7 +76,8 @@ def _read_ply(fname):
                 lineending = raw_header[0].replace(b'ply', b'')
                 break
         header = [line.strip().split(b' ') for line in raw_header]
-        header = [(line[2], line[1]) for line in header if line[0] == b'property']
+        header = [(line[2], line[1]) for line in header
+                  if line[0] == b'property']
         cols = {'r': b'red', 'g': b'green', 'b': b'blue'}
         if any(b' diffuse_' in l for l in raw_header):
             cols = {'r': b'diffuse_red', 'g': b'diffuse_green',
@@ -86,12 +90,12 @@ def _read_ply(fname):
                          (b'x', b'y', b'z', cols['r'], cols['g'], cols['b'])]
             for line in f:
                 point = line.strip().split(b' ')
-                yield Point(*[t(n) for t, n in zip(types, point)])
+                yield tuple(t(n) for t, n in zip(types, point))
         else:
             head = [h[0] for h in header]
-            idx = {'x':head.index(b'x'), 'y':head.index(b'y'), 'z':head.index(b'z'),
-                   'r':head.index(cols['r']), 'g':head.index(cols['g']),
-                   'b':head.index(cols['b'])}
+            idx = {'x':head.index(b'x'), 'y':head.index(b'y'),
+                   'z':head.index(b'z'), 'r':head.index(cols['r']),
+                   'g':head.index(cols['g']), 'b':head.index(cols['b'])}
             form_str = '<'
             if b'format binary_big_endian 1.0'+lineending in raw_header:
                 form_str = '>'
@@ -126,7 +130,7 @@ def _read_ply(fname):
                     yield tuple(p_tup[i] for i in ind)
                     raw = f.read(point.size)
 
-def write(cloud, fname):
+def write(cloud, fname, utm_coords=None):
     """Write the given cloud to disk."""
     binary = struct.Struct('<fffBBB')
     with SpooledTemporaryFile(max_size=2**20, mode='w+b') as temp_storage:
@@ -143,6 +147,9 @@ def write(cloud, fname):
                   'property uchar green',
                   'property uchar blue',
                   'end_header', '']
+        if utm_coords is not None and len(utm_coords) == 4:
+            header.insert(-2, 'comment UTM easting northing altitude zone ' +
+                          '{:.2f} {:.2f} {:.2f} {:d}'.format(*utm_coords))
         with open(fname, 'wb') as f:
             f.write('\n'.join(header).encode('ascii'))
             chunk = temp_storage.read(8192)

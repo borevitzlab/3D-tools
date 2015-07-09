@@ -107,7 +107,7 @@ class MapObj(object):
         """Smooths the ground map, to reduce the impact of spurious points, eg.
         points far underground or misclassification of canopy as ground."""
         problematic = self.__problematic()
-        for _ in range(100):
+        for _ in range(10):
             for key in problematic:
                 adjacent = {self.ground.get(n) for n in self._neighbors(key)
                             if not n in problematic}
@@ -117,7 +117,7 @@ class MapObj(object):
                 self.ground[key] = min(adjacent) + 2*args.cellsize
             prev = len(problematic)
             problematic = self.__problematic(problematic)
-            if prev / len(problematic) > 0.9:
+            if len(problematic) / prev > 0.9:
                 break
 
     def _tree_components(self):
@@ -156,7 +156,6 @@ class MapObj(object):
             except RuntimeError:
                 # Recursion depth; finish on next pass.
                 continue
-# TODO:  merge multiple parts of each short tree here
         # Reduce component labels to consecutive integers from zero
         out = dict()
         translate = dict((v, k) for k, v in enumerate(set(com.values())))
@@ -170,7 +169,7 @@ class MapObj(object):
         return ret
 
     def tree_data(self, keys):
-        """Lat, Lon UTM X, UTM Y, height, area, red, green, blue, points."""
+        """Lat, Lon, UTM X, UTM Y, height, area, red, green, blue, points."""
         x = self.offset.x + (max(k[0] for k in keys) +
                              min(k[0] for k in keys)) * args.cellsize / 2
         y = self.offset.y + (max(k[1] for k in keys) +
@@ -196,24 +195,22 @@ class MapObj(object):
                 continue
             keys[v].add(k)
         for v in set(self.trees.values()):
-            yield self.tree_data(keys[v])
+            data = self.tree_data(keys[v])
+            if data[4] > 2*args.slicedepth:
+                # Filter trees with height ~= slicedepth for data quality
+                yield data
 
-def make_sparse(filename, attr=None, *, keep_lowest=True, keep_canopy=True):
-    """Yield points for a sparse point cloud.
-    By default, it keeps both canopy points and the equal lowest points in each
-    grid cell; eliminating ~3/4 of all points without affecting analysis.  It
-    can also keep canopy only or lowest only."""
-    if not keep_lowest and not keep_canopy:
-        raise StopIteration
-    if attr is None:
-        attr = MapObj(filename, colours=False)
-    if attr.file != filename:
-        raise ValueError('Supplied attributes are for a different file.')
-    for point in pointcloudfile.read(filename):
-        if keep_canopy and not attr.is_ground(point):
-            yield point
-        elif keep_lowest and attr.is_lowest(point):
-            yield point
+    def save_sparse_cloud(self, new_fname, *, lowest=True, canopy=True):
+        """Yield points for a sparse point cloud, eliminating ~3/4 of all
+        points without affecting analysis."""
+        newpoints = (point for point in pointcloudfile.read(self.file)
+                     if canopy and not self.is_ground(point)
+                     or lowest and self.is_lowest(point))
+        pointcloudfile.write(newpoints, new_fname, self.offset)
+        if os.path.isfile(self.file[:-4] + '_ply_offset.xyz'):
+            shutil.copy(self.file[:-4] + '_ply_offset.xyz',
+                        new_fname[:-4] + '_ply_offset.xyz')
+        self.file = new_fname
 
 def match_across_takes(trees, previous_trees=None):
     """Applies ID strings to trees based on a previous dataset."""
@@ -280,11 +277,7 @@ def main_processing():
         attr_map = MapObj(args.file, colours=False)
         print('Read {} points into {} cells, writing "{}" ...'.format(
             len(attr_map), len(attr_map.canopy), sparse))
-        pointcloudfile.write(make_sparse(args.file, attr_map), sparse)
-        if os.path.isfile(args.file[:-4] + '_ply_offset.xyz'):
-            shutil.copy(args.file[:-4] + '_ply_offset.xyz',
-                        sparse[:-4] + '_ply_offset.xyz')
-        attr_map.file = sparse
+        attr_map.save_sparse_cloud(sparse)
         print('Reading colours from ' + sparse)
         attr_map.update_colours()
     print('File IO complete, starting analysis...')
