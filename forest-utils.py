@@ -21,7 +21,7 @@ class MapObj(object):
         self.colours = dict()
         self.trees = dict()
         self.file = input_file
-        self.offset = pointcloudfile.UTM_offset_for(self.file)
+        self.offset = pointcloudfile.UTM_offset_for(self.file, args.utmzone)
         self.update_spatial()
         if colours:
             self.update_colours()
@@ -147,6 +147,7 @@ class MapObj(object):
                 else:
                     key_scale_record[cc_key].add(key)
         # Assign a unique integer value to each large key, then search
+        # Final labels are positive ints, but not ordered or consecutive
         com = dict()
         for idx, key in enumerate(tuple(key_scale_record)):
             com[key] = idx
@@ -156,16 +157,11 @@ class MapObj(object):
             except RuntimeError:
                 # Recursion depth; finish on next pass.
                 continue
-        # Reduce component labels to consecutive integers from zero
-        out = dict()
-        translate = dict((v, k) for k, v in enumerate(set(com.values())))
-        for k, v in com.items():
-            out[k] = translate[v]
         # Copy labels to grid of original scale
         ret = dict()
         for key, values in key_scale_record.items():
             for skey in values:
-                ret[skey] = out[key]
+                ret[skey] = com[key]
         return ret
 
     def tree_data(self, keys):
@@ -189,15 +185,15 @@ class MapObj(object):
     def all_trees(self):
         """Yield the characteristics of each tree."""
         ids = list(set(self.trees.values()))
-        keys = [set() for _ in ids]
+        keys = {v: set() for v in ids}
         for k, v in self.trees.items():
             if v is None:
                 continue
             keys[v].add(k)
-        for v in set(self.trees.values()):
+        for v in ids:
             data = self.tree_data(keys[v])
-            if data[4] > 2*args.slicedepth:
-                # Filter trees with height ~= slicedepth for data quality
+            if data[4] > 2*args.slicedepth and data[-1] > 100:
+                # Filter trees by height and point count
                 yield data
 
     def save_sparse_cloud(self, new_fname, *, lowest=True, canopy=True):
@@ -211,6 +207,27 @@ class MapObj(object):
             shutil.copy(self.file[:-4] + '_ply_offset.xyz',
                         new_fname[:-4] + '_ply_offset.xyz')
         self.file = new_fname
+
+    def save_individual_trees(self):
+        """Prototype function to save single trees to files."""
+        if not args.savetrees:
+            return
+        os.makedirs(args.savetrees, exist_ok=True)
+        tree_to_file = {v: os.path.join(args.savetrees, 'tree_'+str(v)+'.ply')
+                        for v in set(self.trees.values())}
+        newpoints = (point for point in pointcloudfile.read(self.file)
+                     if not self.is_ground(point))
+        # TODO: rewrite with one-to-many generators, to save memory
+        points_saved = {v: set() for v in tree_to_file}
+        for p in newpoints:
+            c = self.coords(p)
+            v = self.trees.get(c)
+            if v is not None:
+                points_saved[v].add(p)
+        for v, points in points_saved.items():
+            if len(points) > 100:
+                pointcloudfile.write(points, tree_to_file[v])
+
 
 def match_across_takes(trees, previous_trees=None):
     """Applies ID strings to trees based on a previous dataset."""
@@ -239,6 +256,9 @@ def get_args():
     parser.add_argument(
         'out', default='.', nargs='?',
         help='directory for output files (optional)')
+    parser.add_argument(
+        '--savetrees', default='', nargs='?',
+        help='where to save individual trees (default "", not saved)')
     parser.add_argument( #analysis scale
         '--cellsize', default=0.1, nargs='?',
         help='grid scale; optimal at ~10x point spacing')
@@ -246,7 +266,7 @@ def get_args():
         '--utmzone', default=55, nargs='?',
         help='the UTM coordinate zone for georeferencing')
     parser.add_argument( #feature extraction
-        '--joinedcells', default=4, nargs='?',
+        '--joinedcells', default=3, nargs='?',
         help='use cells X times larger to detect gaps between trees')
     parser.add_argument( #feature extraction
         '--slicedepth', default=0.6, nargs='?',
@@ -283,6 +303,9 @@ def main_processing():
     print('File IO complete, starting analysis...')
     table = '{}_analysis.csv'.format(sparse[:-4].replace('_sparse', ''))
     stream_analysis(attr_map, table)
+    if args.savetrees:
+        print('Saving individual trees...')
+        attr_map.save_individual_trees()
     print('Done.')
 
 if __name__ == '__main__':
