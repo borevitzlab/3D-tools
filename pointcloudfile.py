@@ -53,7 +53,7 @@ def _read_pix4d_ply_parts(fname_list):
     for f in fname_list:
         check_input(f, '.ply')
     first = fname_list.pop(0)
-    offset = UTM_offset_for(first)
+    *offset, zone = UTM_offset_for(first)
     for point in _read_ply(first):
         yield point
     for f in fname_list:
