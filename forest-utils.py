@@ -235,6 +235,17 @@ def match_across_takes(trees, previous_trees=None):
         return [['unknown'] + list(t) for t in trees]
     # TODO: implement this once a second dataset is available.
     raise NotImplementedError('Cannot import names from nonexistent data.')
+    # inputs are lists of (name, utmx, utmy)
+    for _, x1, y1 in trees:
+        dist = 2 * 10**2
+        name = 'unknown'
+        for t in trees:
+            n, x2, y2 = t
+            dxy = (x1-x2)**2 + (y1-y2)**2
+            if dist > dxy:
+                dist = dxy
+                t[0] = n
+    return trees
 
 def stream_analysis(attr, out):
     """Saves the list of trees with attributes to the file 'out'."""
