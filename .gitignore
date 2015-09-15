@@ -4,6 +4,9 @@
 *.xyz
 *.las
 
+# Nuitka compilation artefacts
+forest-utils.[bd]*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

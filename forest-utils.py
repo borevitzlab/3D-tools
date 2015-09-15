@@ -110,7 +110,7 @@ class MapObj(object):
         for _ in range(10):
             for key in problematic:
                 adjacent = {self.ground.get(n) for n in self._neighbors(key)
-                            if not n in problematic}
+                            if n not in problematic}
                 adjacent.discard(None)
                 if not adjacent:
                     continue
@@ -123,7 +123,7 @@ class MapObj(object):
     def _tree_components(self):
         """Returns a dict where keys refer to connected components.
         NB: Not all keys in other dicts exist in this output."""
-        #pylint:disable=too-many-branches
+        # pylint:disable=too-many-branches
         def expand(old_key, com):
             """Implement depth-first search."""
             for key in self._neighbors(old_key):
@@ -142,7 +142,7 @@ class MapObj(object):
         for key in self.density.keys():
             if self.canopy[key] - self.ground[key] > args.slicedepth:
                 cc_key = tuple(math.floor(k/args.joinedcells) for k in key)
-                if not cc_key in key_scale_record:
+                if cc_key not in key_scale_record:
                     key_scale_record[cc_key] = {key}
                 else:
                     key_scale_record[cc_key].add(key)
@@ -196,12 +196,12 @@ class MapObj(object):
                 # Filter trees by height and point count
                 yield data
 
-    def save_sparse_cloud(self, new_fname, *, lowest=True, canopy=True):
+    def save_sparse_cloud(self, new_fname, lowest=True, canopy=True):
         """Yield points for a sparse point cloud, eliminating ~3/4 of all
         points without affecting analysis."""
         newpoints = (point for point in pointcloudfile.read(self.file)
-                     if canopy and not self.is_ground(point)
-                     or lowest and self.is_lowest(point))
+                     if canopy and not self.is_ground(point) or
+                     lowest and self.is_lowest(point))
         pointcloudfile.write(newpoints, new_fname, self.offset)
         if os.path.isfile(self.file[:-4] + '_ply_offset.xyz'):
             shutil.copy(self.file[:-4] + '_ply_offset.xyz',
@@ -212,7 +212,10 @@ class MapObj(object):
         """Prototype function to save single trees to files."""
         if not args.savetrees:
             return
-        os.makedirs(args.savetrees, exist_ok=True)
+        if os.path.isfile(args.savetrees):
+            raise IOError('Output dir for trees is already a file')
+        if not os.path.isdir(args.savetrees):
+            os.makedirs(args.savetrees)
         tree_to_file = {v: os.path.join(args.savetrees, 'tree_'+str(v)+'.ply')
                         for v in set(self.trees.values())}
         newpoints = (point for point in pointcloudfile.read(self.file)
@@ -247,6 +250,7 @@ def match_across_takes(trees, previous_trees=None):
                 t[0] = n
     return trees
 
+
 def stream_analysis(attr, out):
     """Saves the list of trees with attributes to the file 'out'."""
     form_str = '"{}",{},{},{:.1f},{:.1f},{},{:.2f},{:.2f},{},{},{},{},\n'
@@ -256,6 +260,7 @@ def stream_analysis(attr, out):
                 'height, area, red, green, blue, point_count,\n')
         for data in trees:
             f.write(form_str.format(*data))
+
 
 def get_args():
     """Handle command-line arguments, including default values."""
@@ -270,19 +275,19 @@ def get_args():
     parser.add_argument(
         '--savetrees', default='', nargs='?',
         help='where to save individual trees (default "", not saved)')
-    parser.add_argument( #analysis scale
+    parser.add_argument(  # analysis scale
         '--cellsize', default=0.1, nargs='?',
         help='grid scale; optimal at ~10x point spacing')
-    parser.add_argument( #georeferenced location
+    parser.add_argument(  # georeferenced location
         '--utmzone', default=55, nargs='?',
         help='the UTM coordinate zone for georeferencing')
-    parser.add_argument( #feature extraction
+    parser.add_argument(  # feature extraction
         '--joinedcells', default=3, nargs='?',
         help='use cells X times larger to detect gaps between trees')
-    parser.add_argument( #feature extraction
+    parser.add_argument(  # feature extraction
         '--slicedepth', default=0.6, nargs='?',
         help='max tree width >= this for feature extraction')
-    parser.add_argument( #feature classification
+    parser.add_argument(  # feature classification
         '--grounddepth', default=0.2, nargs='?',
         help='depth to omit from sparse point cloud')
     return parser.parse_args()
@@ -290,7 +295,8 @@ def get_args():
 # args are globally available
 args = get_args()
 if not os.path.isfile(args.file):
-    raise FileNotFoundError(args.file)
+    raise IOError('Input file not found, ' + args.file)
+
 
 def main_processing():
     """Logic on which functions to call, and efficient order."""
@@ -321,4 +327,3 @@ def main_processing():
 
 if __name__ == '__main__':
     main_processing()
-
