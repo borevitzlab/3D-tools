@@ -3,7 +3,7 @@
 
 import argparse
 import math
-import os.path
+import os
 import shutil
 
 import pointcloudfile
@@ -229,37 +229,17 @@ class MapObj(object):
                 points_saved[v].add(p)
         for v, points in points_saved.items():
             if len(points) > 100:
-                pointcloudfile.write(points, tree_to_file[v])
-
-
-def match_across_takes(trees, previous_trees=None):
-    """Applies ID strings to trees based on a previous dataset."""
-    if previous_trees is None:
-        return [['unknown'] + list(t) for t in trees]
-    # TODO: implement this once a second dataset is available.
-    raise NotImplementedError('Cannot import names from nonexistent data.')
-    # inputs are lists of (name, utmx, utmy)
-    for _, x1, y1 in trees:
-        dist = 2 * 10**2
-        name = 'unknown'
-        for t in trees:
-            n, x2, y2 = t
-            dxy = (x1-x2)**2 + (y1-y2)**2
-            if dist > dxy:
-                dist = dxy
-                t[0] = n
-    return trees
+                pointcloudfile.write(points, tree_to_file[v], self.offset)
 
 
 def stream_analysis(attr, out):
     """Saves the list of trees with attributes to the file 'out'."""
     form_str = '"{}",{},{},{:.1f},{:.1f},{},{:.2f},{:.2f},{},{},{},{},\n'
-    trees = match_across_takes(attr.all_trees(), None)
     with open(out, 'w') as f:
         f.write('name (ID), latitude, longitude, UTM_X, UTM_Y, UTM_zone, '
                 'height, area, red, green, blue, point_count,\n')
-        for data in trees:
-            f.write(form_str.format(*data))
+        for data in attr.all_trees():
+            f.write(form_str.format('unknown', *data))
 
 
 def get_args():

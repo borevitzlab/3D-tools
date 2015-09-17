@@ -17,6 +17,16 @@ UTM_offset = namedtuple('UTM_offset', ['x', 'y', 'z', 'zone'])
 
 def UTM_offset_for(filename, zone=55):
     """Return the (x, y, z) offset for a Pix4D .ply cloud."""
+    with open(filename, 'rb') as f:
+        raw_header = []
+        while True:
+            raw_header.append(next(f))
+            if raw_header[-1].startswith(b'end_header'):
+                # ply files can have basically any line ending...
+                break
+        offset = _process_header(raw_header)[-1]
+    if isinstance(offset, UTM_offset) and offset is not None:
+        return offset
     offset = filename[:-4] + '_ply_offset.xyz'
     if not os.path.isfile(offset):
         return UTM_offset(0, 0, 0, zone)
@@ -57,11 +67,11 @@ def _read_pix4d_ply_parts(fname_list):
     for f in fname_list:
         check_input(f, '.ply')
     first = fname_list.pop(0)
-    *offset, zone = UTM_offset_for(first)
     for point in _read_ply(first):
         yield point
     for f in fname_list:
-        dx, dy, dz = [b - a for a, b in zip(offset, UTM_offset_for(f))]
+        dx, dy, dz, _ = [b - a for a, b in
+                         zip(UTM_offset_for(first), UTM_offset_for(f))]
         for x, y, z, r, g, b in _read_ply(f):
             yield x+dx, y+dy, z+dz, r, g, b
 
@@ -70,9 +80,18 @@ def _process_header(raw_header):
     """Return key information from a list of bytestrings (the raw header);
     a Struct format string (empty == ascii mode), and the index order tuple."""
     lineending = raw_header[0].replace(b'ply', b'')
+    while not raw_header[-1].startswith(b'end_header'):
+        raw_header.pop()
+        if not raw_header:
+            raise ValueError('Invalid header for .ply file.')
+
+    offset = None
+    for line in raw_header:
+        if line.startswith(b'comment UTM easting northing altitude zone '):
+            *_, x, y, z, zone = line.strip().split(b' ')
+            offset = UTM_offset(float(x), float(y), float(z), int(zone))
     header = [line.strip().split(b' ') for line in raw_header]
-    header = [(line[2], line[1]) for line in header
-              if line[0] == b'property']
+    header = [(line[2], line[1]) for line in header if line[0] == b'property']
     cols = {'r': b'red', 'g': b'green', 'b': b'blue'}
     if any(b' diffuse_' in l for l in raw_header):
         cols = {'r': b'diffuse_red', 'g': b'diffuse_green',
@@ -91,7 +110,7 @@ def _process_header(raw_header):
                 i, b'float' in line[1] or line[1] == b'double')
         types = [float if s[1] else int for s in
                  (b'x', b'y', b'z', cols['r'], cols['g'], cols['b'])]
-        return False, types, ind
+        return False, types, ind, offset
     # Binary mode
     form_str = '<'
     if b'format binary_big_endian 1.0'+lineending in raw_header:
@@ -106,15 +125,13 @@ def _process_header(raw_header):
                  b'int': 'i'}
     form_str += ''.join(ply_types[t] for _, t in header)
     point = struct.Struct(form_str)
-    return True, point, ind
+    return True, point, ind, offset
 
 
 def _read_ply(fname):
     """Opens the specified file, and returns a point set in the format required
     by attributes_from_cloud.  Only handles xyzrgb point clouds, but that's
     a fine subset of the format.  See http://paulbourke.net/dataformats/ply/"""
-    # pylint:disable=too-many-branches,too-many-locals,too-many-statements
-    # TODO:  fix Py2-only ValueError (can't mix read() and iteration)
     check_input(fname, '.ply')
     with open(fname, 'rb') as f:
         raw_header = []
@@ -123,7 +140,7 @@ def _read_ply(fname):
             if raw_header[-1].startswith(b'end_header'):
                 # ply files can have basically any line ending...
                 break
-        is_bin, point, ind = _process_header(raw_header)
+        is_bin, point, ind, _ = _process_header(raw_header)
         if not is_bin:
             # ASCII mode
             for line in f:
