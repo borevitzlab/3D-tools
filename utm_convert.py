@@ -5,6 +5,7 @@ Translated from the FOSS Javascript at
 http://home.hiwaay.net/~taylorc/toolbox/geography/geoutm.html
 """
 
+import argparse
 import math
 
 # Ellipsoid model constants for WGS84
@@ -193,7 +194,29 @@ def LatLon_to_UTM(lat, lon):
     """Take lat and lon in decimal degrees, and return UTM x, y, and zone."""
     return LatLonToUTMXY(math.radians(lat), math.radians(lon))
 
-if __name__ == '__main__':
-    a, b = (float(n) for n in input('What XY coords?  ').split())
-    print(UTM_to_LatLon(a, b))
+def get_args():
+    """Handle the very simple options."""
+    parser = argparse.ArgumentParser(description=(''
+        'A simple tool to convert between Lat/Lon and UTM coordinates.  '
+        'If two values are given, convert lat and lon to UTM.  If three are '
+        'given convert UTM X, UTM Y and UTM zone to lat/lon.'))
+    parser.add_argument(
+        'n1', type=float,
+        help='Latitude in demimal degrees, or UTM X-coordinate in meters')
+    parser.add_argument(
+        'n2', type=float,
+        help='Longitude in demimal degrees, or UTM Y-coordinate in meters')
+    parser.add_argument(
+        'UTMZone', type=int, nargs='?', default=None,
+        help='[optional] UTM zone, if converting from UTM.  Ommit for reverse')
+    return parser.parse_args()
 
+if __name__ == '__main__':
+    args = get_args()
+    if args.UTMZone is not None:
+        print('Lat:  {}\nLon:  {}'.format(
+            *UTM_to_LatLon(args.n1, args.n2, args.UTMZone)))
+    else:
+        latlon, zone = LatLon_to_UTM(args.n1, args.n2)
+        print('UTM X:     {}\nUTM Y:     {}\nUTM Zone:  {}'.format(
+            latlon[0], latlon[1], zone))
