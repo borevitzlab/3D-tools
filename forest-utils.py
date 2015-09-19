@@ -6,6 +6,7 @@ import math
 import os
 import shutil
 
+import matchtrees
 import pointcloudfile
 from utm_convert import UTM_to_LatLon
 
@@ -13,13 +14,18 @@ from utm_convert import UTM_to_LatLon
 class MapObj(object):
     """Stores a maximum and minimum height map of the cloud, in GRID_SIZE
     cells.  Hides data structure and accessed through coordinates."""
-    def __init__(self, input_file, colours=True):
+    def __init__(self, input_file, colours=True, prev_csv=None):
         """Initialises data"""
         self.canopy = dict()
         self.density = dict()
         self.ground = dict()
         self.colours = dict()
         self.trees = dict()
+        self.prev_trees = []
+        if prev_csv is not None:
+            if os.path.isfile(prev_csv):
+                self.prev_trees = list(
+                    matchtrees.name_loc_list_from_csv(prev_csv))
         self.file = input_file
         self.offset = pointcloudfile.UTM_offset_for(self.file, args.utmzone)
         self.update_spatial()
@@ -170,17 +176,18 @@ class MapObj(object):
                              min(k[0] for k in keys)) * args.cellsize / 2
         y = self.offset.y + (max(k[1] for k in keys) +
                              min(k[1] for k in keys)) * args.cellsize / 2
-        out = list(UTM_to_LatLon(x, y, args.utmzone))
-        out.extend([x, y, args.utmzone])
+        name = matchtrees.name_from_location(self.prev_trees, (x, y))
+        yield name if name is not None else 'unknown'
+        yield from UTM_to_LatLon(x, y, args.utmzone)
+        yield from [x, y, args.utmzone]
         height, r, g, b, points = 0, 0, 0, 0, 0
         for k in keys:
             height = max(height, self.canopy[k] - self.ground[k])
             r, g, b = (a+b for a, b in zip(
                 [r, g, b], self.colours.get(k, [0, 0, 0])))
             points += self.density[k]
-        out.extend([height, len(keys) * args.cellsize**2,
-                    r // points, g // points, b // points, points])
-        return tuple(out)
+        yield from [height, len(keys) * args.cellsize**2,
+                    r // points, g // points, b // points, points]
 
     def all_trees(self):
         """Yield the characteristics of each tree."""
@@ -191,8 +198,8 @@ class MapObj(object):
                 continue
             keys[v].add(k)
         for v in ids:
-            data = self.tree_data(keys[v])
-            if data[4] > 2*args.slicedepth and data[-1] > 100:
+            data = list(self.tree_data(keys[v]))
+            if data[5] > 1.5*args.slicedepth and data[-1] > 100:
                 # Filter trees by height and point count
                 yield data
 
@@ -239,7 +246,7 @@ def stream_analysis(attr, out):
         f.write('name (ID), latitude, longitude, UTM_X, UTM_Y, UTM_zone, '
                 'height, area, red, green, blue, point_count,\n')
         for data in attr.all_trees():
-            f.write(form_str.format('unknown', *data))
+            f.write(form_str.format(*data))
 
 
 def get_args():
@@ -259,17 +266,21 @@ def get_args():
         '--cellsize', default=0.1, nargs='?',
         help='grid scale; optimal at ~10x point spacing')
     parser.add_argument(  # georeferenced location
-        '--utmzone', default=55, nargs='?',
+        '--utmzone', default=55,
         help='the UTM coordinate zone for georeferencing')
     parser.add_argument(  # feature extraction
-        '--joinedcells', default=3, nargs='?',
+        '--joinedcells', default=3,
         help='use cells X times larger to detect gaps between trees')
     parser.add_argument(  # feature extraction
-        '--slicedepth', default=0.6, nargs='?',
-        help='max tree width >= this for feature extraction')
+        '--slicedepth', default=0.6,
+        help='slice depth for canopy area and feature extraction')
     parser.add_argument(  # feature classification
-        '--grounddepth', default=0.2, nargs='?',
+        '--grounddepth', default=0.2,
         help='depth to omit from sparse point cloud')
+    parser.add_argument(  # match names from previous data
+        '--prevcsv', default=None,
+        help='a csv file with tree names in the first column, and either ' +
+        'columns for latitude and longitude, or UTM_X and UTM_Y')
     return parser.parse_args()
 
 # args are globally available
@@ -287,11 +298,11 @@ def main_processing():
             args.out, os.path.basename(args.file)[:-4] + '_sparse.ply')
     sparse = sparse.replace('_part_1', '')
     if os.path.isfile(sparse):
-        attr_map = MapObj(sparse)
+        attr_map = MapObj(sparse, prev_csv=args.prevcsv)
         print('Read {} points into {} cells'.format(
             len(attr_map), len(attr_map.canopy)))
     else:
-        attr_map = MapObj(args.file, colours=False)
+        attr_map = MapObj(args.file, colours=False, prev_csv=args.prevcsv)
         print('Read {} points into {} cells, writing "{}" ...'.format(
             len(attr_map), len(attr_map.canopy), sparse))
         attr_map.save_sparse_cloud(sparse)
