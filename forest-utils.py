@@ -2,9 +2,9 @@
 """Tools for analysing forest point clouds."""
 
 import argparse
+import csv
 import math
 import os
-import shutil
 
 import matchtrees
 import pointcloudfile
@@ -14,6 +14,8 @@ from utm_convert import UTM_to_LatLon
 class MapObj(object):
     """Stores a maximum and minimum height map of the cloud, in GRID_SIZE
     cells.  Hides data structure and accessed through coordinates."""
+    # pylint:disable=too-many-instance-attributes
+
     def __init__(self, input_file, colours=True, prev_csv=None):
         """Initialises data"""
         self.canopy = dict()
@@ -171,23 +173,34 @@ class MapObj(object):
         return ret
 
     def tree_data(self, keys):
-        """Lat, Lon, UTM X, UTM Y, height, area, red, green, blue, points."""
-        x = self.offset.x + (max(k[0] for k in keys) +
-                             min(k[0] for k in keys)) * args.cellsize / 2
-        y = self.offset.y + (max(k[1] for k in keys) +
-                             min(k[1] for k in keys)) * args.cellsize / 2
+        """Return a dictionary of data about the tree in the given keys."""
+        out = dict()
+        # Calculate positional information
+        out['UTM_X'] = x = self.offset.y + args.cellsize * (
+            max(k[0] for k in keys) + min(k[0] for k in keys)) / 2
+        out['UTM_Y'] = y = self.offset.y + args.cellsize * (
+            max(k[1] for k in keys) + min(k[1] for k in keys)) / 2
+        out['UTM_zone'] = args.utmzone
         name = matchtrees.name_from_location(self.prev_trees, (x, y))
-        yield name if name is not None else 'unknown'
-        yield from UTM_to_LatLon(x, y, args.utmzone)
-        yield from [x, y, args.utmzone]
-        height, r, g, b, points = 0, 0, 0, 0, 0
+        out['name'] = name if name is not None else 'unknown'
+        out['latitude'], out['longitude'] = UTM_to_LatLon(x, y, args.utmzone)
+        out['base_altitude'] = self.ground[self.coords([x, y])]
+        # Loop over grid cells to accumulate other information
         for k in keys:
-            height = max(height, self.canopy[k] - self.ground[k])
-            r, g, b = (a+b for a, b in zip(
-                [r, g, b], self.colours.get(k, [0, 0, 0])))
-            points += self.density[k]
-        yield from [height, len(keys) * args.cellsize**2,
-                    r // points, g // points, b // points, points]
+            out['height'] = max(out.get('height', 0),
+                                self.canopy[k] - self.ground[k])
+            out['r'], out['g'], out['b'] = (a+b for a, b in zip(
+                [out.get(k, 0) for k in ['r', 'g', 'b']],
+                self.colours.get(k, [0, 0, 0])))
+            out['points'] = out.get('points', 0) + self.density[k]
+        # Finally, normalise colour values and round position to confidence
+        for k in ['r', 'g', 'b']:
+            out[k] = out[k] // out['points']
+        for k in ['height', 'area', 'base_altitude']:
+            out[k] = round(out[k], 2)
+        for k in ['UTM_X', 'UTM_Y']:
+            out[k] = round(out[k], 1)
+        return out
 
     def all_trees(self):
         """Yield the characteristics of each tree."""
@@ -198,9 +211,9 @@ class MapObj(object):
                 continue
             keys[v].add(k)
         for v in ids:
-            data = list(self.tree_data(keys[v]))
-            if data[5] > 1.5*args.slicedepth and data[-1] > 100:
-                # Filter trees by height and point count
+            data = self.tree_data(keys[v])
+            if data['height'] > 1.5 * args.slicedepth:
+                # Filter trees by height
                 yield data
 
     def save_sparse_cloud(self, new_fname, lowest=True, canopy=True):
@@ -210,10 +223,8 @@ class MapObj(object):
                      if canopy and not self.is_ground(point) or
                      lowest and self.is_lowest(point))
         pointcloudfile.write(newpoints, new_fname, self.offset)
-        if os.path.isfile(self.file[:-4] + '_ply_offset.xyz'):
-            shutil.copy(self.file[:-4] + '_ply_offset.xyz',
-                        new_fname[:-4] + '_ply_offset.xyz')
-        self.file = new_fname
+        if lowest and canopy:
+            self.file = new_fname
 
     def save_individual_trees(self):
         """Prototype function to save single trees to files."""
@@ -241,12 +252,15 @@ class MapObj(object):
 
 def stream_analysis(attr, out):
     """Saves the list of trees with attributes to the file 'out'."""
-    form_str = '"{}",{},{},{:.1f},{:.1f},{},{:.2f},{:.2f},{},{},{},{},\n'
-    with open(out, 'w') as f:
-        f.write('name (ID), latitude, longitude, UTM_X, UTM_Y, UTM_zone, '
-                'height, area, red, green, blue, point_count,\n')
+    header = ('name', 'latitude', 'longitude', 'UTM_X', 'UTM_Y', 'UTM_zone',
+              'height', 'area', 'base_altitude',
+              'red', 'green', 'blue', 'point_count')
+    with open(out, 'w') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=header)
+        writer.writeheader()
         for data in attr.all_trees():
-            f.write(form_str.format(*data))
+            data['name'] = '"{}"'.format(data['name'])
+            writer.writerow(data)
 
 
 def get_args():
