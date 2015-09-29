@@ -161,29 +161,50 @@ def _read_ply(fname):
                 raw = f.read(point.size)
 
 
-def write(cloud, fname, utm_coords=None):
-    """Write the given cloud to disk."""
-    binary = struct.Struct('<fffBBB')
-    with SpooledTemporaryFile(max_size=2**20, mode='w+b') as temp_storage:
-        count = 0
-        for count, point in enumerate(cloud, start=1):
-            temp_storage.write(binary.pack(*point))
-        temp_storage.seek(0)
-        header = ['ply', 'format binary_little_endian 1.0',
-                  'element vertex {}'.format(count),
-                  'property float x',
-                  'property float y',
-                  'property float z',
-                  'property uchar red',
-                  'property uchar green',
-                  'property uchar blue',
-                  'end_header', '']
-        if utm_coords is not None and len(utm_coords) == 4:
-            header.insert(-2, 'comment UTM easting northing altitude zone ' +
-                          '{:.2f} {:.2f} {:.2f} {:d}'.format(*utm_coords))
-        with open(fname, 'wb') as f:
-            f.write('\n'.join(header).encode('ascii'))
-            chunk = temp_storage.read(8192)
+class IncrementalWriter(object):
+    """Allows O(n) splitting to subfiles per tree."""
+
+    def __init__(self, filename, utm_coords=None):
+        """Set up the object."""
+        self.filename = filename
+        self.temp_storage = SpooledTemporaryFile(max_size=2**20, mode='w+b')
+        self.count = 0
+        self.binary = struct.Struct('<fffBBB')
+        self.utm_coords = utm_coords
+
+    def __call__(self, point):
+        """Add a single point to this pointcloud."""
+        self.temp_storage.write(self.binary.pack(*point))
+        self.count += 1
+
+    def save_to_disk(self):
+        """Flush data to disk and clean up."""
+        self.temp_storage.seek(0)
+        head = ['ply', 'format binary_little_endian 1.0',
+                'element vertex {}'.format(self.count),
+                'property float x',
+                'property float y',
+                'property float z',
+                'property uchar red',
+                'property uchar green',
+                'property uchar blue',
+                'end_header', '']
+        if self.utm_coords is not None and len(self.utm_coords) == 4:
+            head.insert(-2, 'comment UTM_easting UTM_northing altitude zone ' +
+                        '{:.2f} {:.2f} {:.2f} {:d}'.format(*self.utm_coords))
+        with open(self.filename, 'wb') as f:
+            f.write('\n'.join(head).encode('ascii'))
+            chunk = self.temp_storage.read(8192)
             while chunk:
                 f.write(chunk)
-                chunk = temp_storage.read(8192)
+                chunk = self.temp_storage.read(8192)
+        self.temp_storage.close()
+
+
+def write(cloud, fname, utm_coords=None):
+    """Write the given cloud to disk."""
+    writer = IncrementalWriter(fname, utm_coords)
+    for p in cloud:
+        writer(p)
+    writer.close()
+

@@ -186,7 +186,7 @@ class MapObj(object):
         out['name'] = name if name is not None else 'unknown'
         out['latitude'], out['longitude'] = UTM_to_LatLon(x, y, args.utmzone)
         out['area'] = len(keys) * args.cellsize**2
-        out['base_altitude'] = statistics.mean( self.ground[k] for k in keys)
+        out['base_altitude'] = statistics.mean(self.ground[k] for k in keys)
         # Loop over grid cells to accumulate other information
         for k in keys:
             out['height'] = max(out.get('height', 0),
@@ -229,27 +229,26 @@ class MapObj(object):
             self.file = new_fname
 
     def save_individual_trees(self):
-        """Prototype function to save single trees to files."""
+        """Save single trees to files."""
         if not args.savetrees:
             return
         if os.path.isfile(args.savetrees):
             raise IOError('Output dir for trees is already a file')
         if not os.path.isdir(args.savetrees):
             os.makedirs(args.savetrees)
-        tree_to_file = {v: os.path.join(args.savetrees, 'tree_'+str(v)+'.ply')
-                        for v in set(self.trees.values())}
-        newpoints = (point for point in pointcloudfile.read(self.file)
-                     if not self.is_ground(point))
-        # TODO: rewrite with one-to-many generators, to save memory
-        points_saved = {v: set() for v in tree_to_file}
-        for p in newpoints:
-            c = self.coords(p)
-            v = self.trees.get(c)
-            if v is not None:
-                points_saved[v].add(p)
-        for v, points in points_saved.items():
-            if len(points) > 100:
-                pointcloudfile.write(points, tree_to_file[v], self.offset)
+        # Maps tree ID numbers to a incremental writer for that tree
+        tree_to_file = {tree_ID: pointcloudfile.IncrementalWriter(
+            os.path.join(args.savetrees, 'tree_{}.ply'.format(tree_ID)),
+            self.offset) for tree_ID in set(self.trees.values())}
+        # For non-ground, find the appropriate writer and call with the point
+        for point in pointcloudfile.read(self.file):
+            if not self.is_ground(point):
+                continue
+            val = self.trees.get(self.coords(point))
+            if val is not None:
+                tree_to_file[val](point)
+        for writer in set(tree_to_file.values()):
+            writer.save_to_disk()
 
 
 def stream_analysis(attr, out):
