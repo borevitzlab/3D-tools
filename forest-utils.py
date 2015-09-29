@@ -5,6 +5,7 @@ import argparse
 import csv
 import math
 import os
+import statistics
 
 import matchtrees
 import pointcloudfile
@@ -184,18 +185,19 @@ class MapObj(object):
         name = matchtrees.name_from_location(self.prev_trees, (x, y))
         out['name'] = name if name is not None else 'unknown'
         out['latitude'], out['longitude'] = UTM_to_LatLon(x, y, args.utmzone)
-        out['base_altitude'] = self.ground[self.coords([x, y])]
+        out['area'] = len(keys) * args.cellsize**2
+        out['base_altitude'] = statistics.mean( self.ground[k] for k in keys)
         # Loop over grid cells to accumulate other information
         for k in keys:
             out['height'] = max(out.get('height', 0),
                                 self.canopy[k] - self.ground[k])
-            out['r'], out['g'], out['b'] = (a+b for a, b in zip(
-                [out.get(k, 0) for k in ['r', 'g', 'b']],
+            out['red'], out['green'], out['blue'] = (a+b for a, b in zip(
+                [out.get(k, 0) for k in ['red', 'green', 'blue']],
                 self.colours.get(k, [0, 0, 0])))
-            out['points'] = out.get('points', 0) + self.density[k]
+            out['point_count'] = out.get('point_count', 0) + self.density[k]
         # Finally, normalise colour values and round position to confidence
-        for k in ['r', 'g', 'b']:
-            out[k] = out[k] // out['points']
+        for k in ['red', 'green', 'blue']:
+            out[k] = out[k] // out['point_count']
         for k in ['height', 'area', 'base_altitude']:
             out[k] = round(out[k], 2)
         for k in ['UTM_X', 'UTM_Y']:
@@ -255,7 +257,7 @@ def stream_analysis(attr, out):
     header = ('name', 'latitude', 'longitude', 'UTM_X', 'UTM_Y', 'UTM_zone',
               'height', 'area', 'base_altitude',
               'red', 'green', 'blue', 'point_count')
-    with open(out, 'w') as csvfile:
+    with open(out, 'w', newline='') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=header)
         writer.writeheader()
         for data in attr.all_trees():
@@ -269,30 +271,30 @@ def get_args():
         description=('Takes a .ply forest  point cloud; outputs a sparse point'
                      'cloud and a .csv file of attributes for each tree.'))
     parser.add_argument(
-        'file', help='name of the file to process')
+        'file', help='name of the file to process', type=str)
     parser.add_argument(
-        'out', default='.', nargs='?',
+        'out', default='.', nargs='?', type=str,
         help='directory for output files (optional)')
     parser.add_argument(
-        '--savetrees', default='', nargs='?',
+        '--savetrees', default='', nargs='?', type=str,
         help='where to save individual trees (default "", not saved)')
     parser.add_argument(  # analysis scale
-        '--cellsize', default=0.1, nargs='?',
+        '--cellsize', default=0.1, nargs='?', type=float,
         help='grid scale; optimal at ~10x point spacing')
     parser.add_argument(  # georeferenced location
-        '--utmzone', default=55,
+        '--utmzone', default=55, type=int,
         help='the UTM coordinate zone for georeferencing')
     parser.add_argument(  # feature extraction
-        '--joinedcells', default=3,
+        '--joinedcells', default=3, type=float,
         help='use cells X times larger to detect gaps between trees')
     parser.add_argument(  # feature extraction
-        '--slicedepth', default=0.6,
+        '--slicedepth', default=0.6, type=float,
         help='slice depth for canopy area and feature extraction')
     parser.add_argument(  # feature classification
-        '--grounddepth', default=0.2,
+        '--grounddepth', default=0.2, type=float,
         help='depth to omit from sparse point cloud')
     parser.add_argument(  # match names from previous data
-        '--prevcsv', default=None,
+        '--prevcsv', default=None, type=str,
         help='a csv file with tree names in the first column, and either ' +
         'columns for latitude and longitude, or UTM_X and UTM_Y')
     return parser.parse_args()
