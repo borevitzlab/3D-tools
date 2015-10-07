@@ -8,10 +8,31 @@ http://home.hiwaay.net/~taylorc/toolbox/geography/geoutm.html
 import argparse
 import math
 
+try:
+    from hypothesis import given, assume
+    import hypothesis.strategies as st
+except ImportError:
+    # If hypothesis is not available, our tests are just no-ops.
+    def noop(*args, **kwargs): return lambda v: None
+    given = assume = st = noop
+    noop.floats = noop.integers = noop.booleans = noop
+
+
+# 10000000 and 1000000 meters look too similar, so let's name big constants.
+EARTH_CIRC = 40.075 * 10**6
+UTM_MAX_VAL = 10**7
+
+# For testing, define the range of values various inputs can have
+st_utm_coord = st.floats(min_value=0, max_value=UTM_MAX_VAL)
+st_lats = st.floats(min_value=-math.pi/2, max_value=math.pi/2)
+st_lons = st.floats(min_value=-math.pi, max_value=math.pi)
+st_zone = st.integers(min_value=1, max_value=60)
+
 # Ellipsoid model constants for WGS84
 sm_a = 6378137
 sm_b = 6356752.314
 UTMScaleFactor = 0.9996
+
 
 def ArcLengthOfMeridian(phi):
     '''Computes the ellipsoidal distance from the equator to a point at a
@@ -35,9 +56,11 @@ def ArcLengthOfMeridian(phi):
                 delta * math.sin(6 * phi),
                 epsilon * math.sin(8 * phi)]) * alpha
 
-def UTMCentralMeridian(zone):
-    '''Determines the central meridian for the given UTM zone.'''
-    return math.radians(int(zone)*6 - 183)
+
+@given(st_lats)
+def test_ArcLengthOfMeridian(phi):
+    assert -EARTH_CIRC/4 <= ArcLengthOfMeridian(phi) <= EARTH_CIRC/4
+
 
 def FootpointLatitude(y):
     '''Computes the footpoint latitude for use in converting transverse
@@ -62,6 +85,12 @@ def FootpointLatitude(y):
                 delta_ * math.sin(6 * y_),
                 epsilon_ * math.sin(8 * y_)])
 
+
+@given(st_utm_coord)
+def test_FootpointLatitude(y):
+    assert 0 <= FootpointLatitude(y) <= math.pi/2, y
+
+
 def MapLatLonToXY(phi, lambda_, lambda_0):
     '''Converts a latitude/longitude pair to x and y coordinates in the
     Transverse Mercator projection.  Note that Transverse Mercator is not
@@ -81,8 +110,8 @@ def MapLatLonToXY(phi, lambda_, lambda_0):
     t = math.tan(phi)
     l = lambda_ - lambda_0
 
-    #Precalculate coefficients for l**n in the equations below so humans
-    #can read the expressions for easting and northing
+    # Precalculate coefficients for l**n in the equations below so humans
+    # can read the expressions for easting and northing
     coef = {
         1: 1,
         2: 1,
@@ -103,10 +132,11 @@ def MapLatLonToXY(phi, lambda_, lambda_0):
         7: N / 5040,
         8: t / 40320 * N
         }
-    #Calculate easting and northing
+    # Calculate easting and northing
     x = sum(frac[n] * math.cos(phi)**n * coef[n] * l**n for n in [1, 3, 5, 7])
     y = sum(frac[n] * math.cos(phi)**n * coef[n] * l**n for n in [2, 4, 6, 8])
     return x, y + ArcLengthOfMeridian(phi)
+
 
 def LatLonToUTMXY(lat, lon):
     '''Converts a latitude/longitude pair to x and y coordinates in the
@@ -120,13 +150,33 @@ def LatLonToUTMXY(lat, lon):
         2-element tuple of x and y coordinates in meters, and the UTM zone.
     '''
     zone = int((math.degrees(lon)+183) / 6)
-    x, y = MapLatLonToXY(lat, lon, UTMCentralMeridian(zone))
+    if zone < 1:
+        zone += 60
+    elif zone > 60:
+        zone -= 60
+    c_merid = math.radians(zone*6 - 183)
+    x, y = MapLatLonToXY(lat, lon, c_merid)
     # Adjust easting and northing for UTM system
-    x = x * UTMScaleFactor + 500000
+    x = x * UTMScaleFactor + UTM_MAX_VAL/20
     y *= UTMScaleFactor
+    south = False
     if y < 0:
-        y += 10000000
-    return (x, y), zone
+        y += UTM_MAX_VAL
+        south = True
+    return (x, y), zone, south
+
+
+@given(st_lats, st_lons)
+def test_LatLonToUTMXY(lat, lon):
+    # TODO:  work out why this assumption is required; fix it. (zone related?)
+    # Low priority, since the code is never called with such values.
+    assume(math.radians(-177) <= lon)
+    xy, zone, south = LatLonToUTMXY(lat, lon)
+    assert zone in range(1, 61), (zone, lon)
+    for i in xy:
+        assert 0 <= i <= UTM_MAX_VAL, xy
+    assert south == (lat < 0), (lat, south)
+
 
 def MapXYToLatLon(x, y, lambda_0):
     '''Converts x and y coordinates in the Transverse Mercator projection to
@@ -136,7 +186,7 @@ def MapXYToLatLon(x, y, lambda_0):
     Args:
         x (meters): The easting of the point.
         y (meters): The northing of the point.
-        lambda_0 (adians): Longitude of the central meridian to be used.
+        lambda_0 (radians): Longitude of the central meridian to be used.
 
     Returns:
         (radians): 2-element tuple of latitude and longitude.
@@ -158,7 +208,7 @@ def MapXYToLatLon(x, y, lambda_0):
         6: tf / (720 * Nf**6),
         7: 1 / (5040 * Nf**7 * cf),
         8: tf / (40320 * Nf**8)}
-    #Precalculate polynomial coefficients for x**n
+    # Precalculate polynomial coefficients for x**n
     poly = {
         1: 1,
         2: -1 - nuf2,
@@ -169,9 +219,22 @@ def MapXYToLatLon(x, y, lambda_0):
         6: -61 - 90 * tf**2 - 45 * tf**4 - 107 * nuf2 + 162 * tf**2 * nuf2,
         7: -61 - 662 * tf**2 - 1320 * tf**4 - 720 * tf**6,
         8: 1385 + 3633 * tf**2 + 4095 * tf**4 + 1575 * tf**6}
-    #Calculate latitude and longitude
-    return (phif + sum(frac[n] * poly[n] * x**n for n in [2, 4, 6, 8]),
-            lambda_0 + sum(frac[n] * poly[n] * x**n for n in [1, 3, 5, 7]))
+    # Calculate latitude and longitude
+    lat = phif + sum(frac[n] * poly[n] * x**n for n in [2, 4, 6, 8])
+    lon = lambda_0 + sum(frac[n] * poly[n] * x**n for n in [1, 3, 5, 7])
+
+    def wrap(L, i):
+        """Wrap overflowing coordinates around the sphere."""
+        return ((L + math.pi/i) % 2*math.pi/i) - math.pi/i
+    return wrap(lat, 2), wrap(lon, 1)
+
+
+@given(st_utm_coord, st_utm_coord, st_lons)
+def test_MapXYToLatLon(x, y, lambda_0):
+    lat, lon = MapXYToLatLon(x, y, lambda_0)
+    assert -math.pi/2 <= lat <= math.pi/2
+    assert -math.pi <= lon <= math.pi
+
 
 def UTMXYToLatLon(x, y, zone, south):
     '''Converts x and y coordinates in the Universal Transverse Mercator
@@ -186,27 +249,37 @@ def UTMXYToLatLon(x, y, zone, south):
     Returns:
        (radians): A latitude, longitude tuple.
     '''
-    x -= 500000
+    x -= UTM_MAX_VAL / 20
     x /= UTMScaleFactor
-    #If in southern hemisphere, adjust y accordingly.
+    # If in southern hemisphere, adjust y accordingly.
     if south:
-        y -= 10000000
+        y -= UTM_MAX_VAL
     y /= UTMScaleFactor
     # We need the central meridian of the UTM zone, in radians
-    c_merid = UTMCentralMeridian(zone)
+    c_merid = math.radians(int(zone)*6 - 183)
     return MapXYToLatLon(x, y, c_merid)
+
+
+@given(st_utm_coord, st_utm_coord, st_zone, st.booleans())
+def test_UTMXYToLatLon(x, y, zone, south):
+    lat, lon = UTMXYToLatLon(x, y, zone, south)
+    assert -math.pi/2 <= lat <= math.pi/2
+    assert -math.pi <= lon <= math.pi
+
 
 def UTM_to_LatLon(x, y, zone=55, south=True):
     """Take xy values in UTM (default zone S55), and return lat and lon."""
-    return tuple([math.degrees(n) for n in UTMXYToLatLon(x, y, zone, south)])
+    return tuple(math.degrees(n) for n in UTMXYToLatLon(x, y, zone, south))
+
 
 def LatLon_to_UTM(lat, lon):
     """Take lat and lon in decimal degrees, and return UTM x, y, and zone."""
     return LatLonToUTMXY(math.radians(lat), math.radians(lon))
 
+
 def get_args():
     """Handle the very simple options."""
-    parser = argparse.ArgumentParser(description=(''
+    parser = argparse.ArgumentParser(description=(
         'A simple tool to convert between Lat/Lon and UTM coordinates.  '
         'If two values are given, convert lat and lon to UTM.  If three are '
         'given convert UTM X, UTM Y and UTM zone to lat/lon.'))
@@ -221,12 +294,13 @@ def get_args():
         help='[optional] UTM zone, if converting from UTM.  Ommit for reverse')
     return parser.parse_args()
 
+
 if __name__ == '__main__':
     args = get_args()
     if args.UTMZone is not None:
         print('Lat:  {}\nLon:  {}'.format(
             *UTM_to_LatLon(args.n1, args.n2, args.UTMZone)))
     else:
-        latlon, zone = LatLon_to_UTM(args.n1, args.n2)
-        print('UTM X:     {}\nUTM Y:     {}\nUTM Zone:  {}'.format(
-            latlon[0], latlon[1], zone))
+        latlon, zone, south = LatLon_to_UTM(args.n1, args.n2)
+        print('UTM X:     {}\nUTM Y:     {}\nUTM Zone:  {}{}'.format(
+            latlon[0], latlon[1], zone, 'S' if south else ''))

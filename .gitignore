@@ -7,6 +7,9 @@
 # Nuitka compilation artefacts
 forest-utils.[bd]*
 
+# Hypothesis testing data
+.hypothesis/
+
 # Built documentation
 _build/
 
