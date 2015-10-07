@@ -16,10 +16,12 @@ UTMScaleFactor = 0.9996
 def ArcLengthOfMeridian(phi):
     '''Computes the ellipsoidal distance from the equator to a point at a
     given latitude.
-    Inputs:
-        phi - Latitude of the point, in radians.
+
+    Args:
+        phi (radians): Latitude of the point.
+
     Returns:
-        The ellipsoidal distance of the point from the equator, in meters.
+        (meters): The ellipsoidal distance of the point from the equator.
     '''
     n = (sm_a - sm_b) / (sm_a + sm_b)
     alpha = ((sm_a + sm_b) / 2) * (1 + n**2 / 4) + n**4 / 64
@@ -40,10 +42,12 @@ def UTMCentralMeridian(zone):
 def FootpointLatitude(y):
     '''Computes the footpoint latitude for use in converting transverse
     Mercator coordinates to ellipsoidal coordinates.
-    Inputs:
-        y - The UTM northing coordinate, in meters.
+
+    Args:
+        y (meters): The UTM northing coordinate.
+
     Returns:
-        The footpoint latitude, in radians.
+        (radians): The footpoint latitude.
     '''
     n = (sm_a - sm_b) / (sm_a + sm_b)
     alpha_ = 0.5 * (sm_a + sm_b) * (1 + n**2 / 4 + n**4 / 64)
@@ -62,13 +66,14 @@ def MapLatLonToXY(phi, lambda_, lambda_0):
     '''Converts a latitude/longitude pair to x and y coordinates in the
     Transverse Mercator projection.  Note that Transverse Mercator is not
     the same as UTM - a scale factor is required to convert between them.
-    Inputs:
-        phi - Latitude of the point, in radians.
-        lambda_ - Longitude of the point, in radians.
-        lambda_0 - Longitude of the central meridian to be used, in radians.
-    Outputs:
-        xy - A 2-element array containing the x and y coordinates
-             of the computed point.
+
+    Args:
+        phi (radians): Latitude of the point.
+        lambda_ (radians): Longitude of the point.
+        lambda_0 (radians): Longitude of the central meridian to be used.
+
+    Returns:
+        2-element tuple of x and y coordinates in meters.
     '''
     ep2 = (sm_a**2 - sm_b**2) / sm_b**2
     nu2 = ep2 * math.cos(phi)**2
@@ -106,12 +111,13 @@ def MapLatLonToXY(phi, lambda_, lambda_0):
 def LatLonToUTMXY(lat, lon):
     '''Converts a latitude/longitude pair to x and y coordinates in the
     Universal Transverse Mercator projection.
-    Inputs:
-        lat - Latitude of the point, in radians.
-        lon - Longitude of the point, in radians.
-    Outputs:
-        xy - A 2-element array where the UTM x and y values will be stored.
-        The UTM zone used for calculating the values of x and y.
+
+    Args:
+        lat (radians): Latitude of the point.
+        lon (radians): Longitude of the point.
+
+    Returns:
+        2-element tuple of x and y coordinates in meters, and the UTM zone.
     '''
     zone = int((math.degrees(lon)+183) / 6)
     x, y = MapLatLonToXY(lat, lon, UTMCentralMeridian(zone))
@@ -126,12 +132,14 @@ def MapXYToLatLon(x, y, lambda_0):
     '''Converts x and y coordinates in the Transverse Mercator projection to
     a latitude/longitude pair.  Note that Transverse Mercator is not
     the same as UTM a scale factor is required to convert between them.
-    Inputs:
-        x - The easting of the point, in meters.
-        y - The northing of the point, in meters.
-        lambda_0 - Longitude of the central meridian to be used, in radians.
-    Outputs:
-        a tuple of latitude and longitude
+
+    Args:
+        x (meters): The easting of the point.
+        y (meters): The northing of the point.
+        lambda_0 (adians): Longitude of the central meridian to be used.
+
+    Returns:
+        (radians): 2-element tuple of latitude and longitude.
     '''
     phif = FootpointLatitude(y)
     ep2 = (sm_a**2 - sm_b**2) / sm_b**2
@@ -168,13 +176,15 @@ def MapXYToLatLon(x, y, lambda_0):
 def UTMXYToLatLon(x, y, zone, south):
     '''Converts x and y coordinates in the Universal Transverse Mercator
     projection to a latitude/longitude pair.
-    Inputs:
-        x - The easting of the point, in meters.
-        y - The northing of the point, in meters.
-        zone - The UTM zone in which the point lies.
-        south - If the point is in the southern hemisphere
-    Outputs:
-       a tuple of latitude and longitude of the point, in radians
+
+    Args:
+        x (meters): The easting of the point.
+        y (meters): The northing of the point.
+        zone: The UTM zone in which the point lies, int in the range [1, 60].
+        south (bool): If the point lies in the southern hemisphere.
+
+    Returns:
+       (radians): A latitude, longitude tuple.
     '''
     x -= 500000
     x /= UTMScaleFactor

@@ -298,11 +298,6 @@ def get_args():
         'columns for latitude and longitude, or UTM_X and UTM_Y')
     return parser.parse_args()
 
-# args are globally available
-args = get_args()
-if not os.path.isfile(args.file):
-    raise IOError('Input file not found, ' + args.file)
-
 
 def main_processing():
     """Logic on which functions to call, and efficient order."""
@@ -332,4 +327,8 @@ def main_processing():
     print('Done.')
 
 if __name__ == '__main__':
+    # args are globally available
+    args = get_args()
+    if not os.path.isfile(args.file):
+        raise IOError('Input file not found, ' + args.file)
     main_processing()
