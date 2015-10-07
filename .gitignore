@@ -7,6 +7,9 @@
 # Nuitka compilation artefacts
 forest-utils.[bd]*
 
+# Built documentation
+_build/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
