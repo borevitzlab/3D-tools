@@ -18,17 +18,19 @@ complex code.
 
 import argparse
 import csv
-import os
 
 from utm_convert import LatLon_to_UTM
 
 
 def name_from_location(in_list, new_loc, tolerance=1):
-    """Return the name of the closest location in the list to new_loc,
-    if the seperation is within tolerance.  Otherwise return None.
+    """Return the name of the closest location in the list to new_loc.
 
-    in_list:    a sequence of (name, x, y) tuples
-    new_loc:    an (x, y) tuple
+    Args:
+        in_list: a sequence of (name, x, y) tuples
+        new_loc: an (x, y) tuple
+
+    Returns:
+        The name of the closest location (if any) within tolerance, or None.
     """
     min_dist = 2 * tolerance
     for name, x, y in in_list:
@@ -43,6 +45,12 @@ def name_loc_list_from_csv(fname):
     The name_str is the first column of the file.
     Coordinates are taken from columns with names in (latitude, longitude,
     UTM_X, UTM_Y), case-insensitive.
+
+    Args:
+        fname (path): the filename of the .csv input data file
+
+    Yields:
+        Tuples of a name and it's UTM coordinates (name, x, y) from the file.
     """
     with open(fname) as csvfile:
         firstcol = next(csv.reader(csvfile))[0].lower()
@@ -58,7 +66,7 @@ def name_loc_list_from_csv(fname):
                 yield row[firstcol], x, y
 
 
-def paste_names_across_analyses(old_file, new_file, tolerance_metres=1):
+def paste_names_across_analyses(old_file, new_file, tolerance=1):
     """Copy the names of trees (locations) from one csv file to another.
 
     The matching algorithm is very simple; get the XY location of each name
@@ -67,15 +75,9 @@ def paste_names_across_analyses(old_file, new_file, tolerance_metres=1):
     Each entry in the new_file takes the name of the closest in the old_file
     by XY distance.  If the nearest is above tolerance_metres away, the new
     name is kept.
-    """
-    raise NotImplementedError
 
-
-def rename_tree_clouds(from_file, tree_dir):
-    """Name files containing individual trees based on an input file.
+    NOT YET IMPLEMENTED
     """
-    for f in os.listdir(tree_dir):
-        pass
     raise NotImplementedError
 
 
