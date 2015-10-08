@@ -35,11 +35,10 @@ def UTM_offset_for(filename, zone=55):
         return UTM_offset(x, y, z, zone)
 
 
-def check_input(fname, ending=''):
+def _check_input(fname, ending=''):
     """Checks that the file exists and has the right ending"""
     if not os.path.isfile(fname):
-        raise IOError(
-            'Cannot read points from a nonexistent file')
+        raise FileNotFoundError('Cannot read points from a nonexistent file')
     if not fname.endswith(ending):
         raise ValueError('Tried to read file type {}, expected {}.'.format(
             fname[-4:], ending))
@@ -65,7 +64,7 @@ def _read_pix4d_ply_parts(fname_list):
     Pix4D usually exports point clouds in parts, with a UTM offset for the
     origin.  We can thus read from all (though only write to one file."""
     for f in fname_list:
-        check_input(f, '.ply')
+        _check_input(f, '.ply')
     first = fname_list.pop(0)
     for point in _read_ply(first):
         yield point
@@ -76,79 +75,53 @@ def _read_pix4d_ply_parts(fname_list):
             yield x+dx, y+dy, z+dz, r, g, b
 
 
-def _process_header(raw_header):
+def _process_header(head):
     """Return key information from a list of bytestrings (the raw header);
     a Struct format string (empty == ascii mode), and the index order tuple."""
-    lineending = raw_header[0].replace(b'ply', b'')
-    while not raw_header[-1].startswith(b'end_header'):
-        raw_header.pop()
-        if not raw_header:
+    head = [line.strip().split(b' ') for line in head]
+    is_big_endian = ['format', 'binary_big_endian', '1.0'] in head
+    while not head[-1] == ['end_header']:
+        head.pop()
+        if not head:
             raise ValueError('Invalid header for .ply file.')
 
     offset = None
-    for line in raw_header:
-        if line.startswith(b'comment UTM easting northing altitude zone '):
-            *_, x, y, z, zone = line.strip().split(b' ')
+    for line in head:
+        if line[:4] == ['comment', 'UTM', 'easting', 'northing']:
+            x, y, z, zone = line[-4:]
             offset = UTM_offset(float(x), float(y), float(z), int(zone))
-    header = [line.strip().split(b' ') for line in raw_header]
-    header = [(line[2], line[1]) for line in header if line[0] == b'property']
-    cols = {'r': b'red', 'g': b'green', 'b': b'blue'}
-    if any(b' diffuse_' in l for l in raw_header):
-        cols = {'r': b'diffuse_red', 'g': b'diffuse_green',
-                'b': b'diffuse_blue'}
-    head = [h[0] for h in header]
-    idx = {'x': head.index(b'x'), 'y': head.index(b'y'),
-           'z': head.index(b'z'), 'r': head.index(cols['r']),
-           'g': head.index(cols['g']), 'b': head.index(cols['b'])}
-    ind = (idx['x'], idx['y'], idx['z'], idx['r'], idx['g'], idx['b'])
 
-    if b'format ascii 1.0'+lineending in raw_header:
-        # ASCII mode
-        typedir = {}
-        for i, line in enumerate(header):
-            typedir[line[0]] = (
-                i, b'float' in line[1] or line[1] == b'double')
-        types = [float if s[1] else int for s in
-                 (b'x', b'y', b'z', cols['r'], cols['g'], cols['b'])]
-        return False, types, ind, offset
-    # Binary mode
-    form_str = '<'
-    if b'format binary_big_endian 1.0'+lineending in raw_header:
-        form_str = '>'
-    ply_types = {b'float': 'f',
-                 b'double': 'd',
-                 b'uchar': 'B',
-                 b'char': 'b',
-                 b'ushort': 'H',
-                 b'short': 'h',
-                 b'uint': 'I',
-                 b'int': 'i'}
-    form_str += ''.join(ply_types[t] for _, t in header)
-    point = struct.Struct(form_str)
-    return True, point, ind, offset
+    typeorder = [line[1] for line in head if line[0] == 'property']
+    form_str = '>' if is_big_endian else '<'
+    ply_types = {'float': 'f', 'double': 'd',
+                 'uchar': 'B', 'char': 'b',
+                 'ushort': 'H', 'short': 'h',
+                 'uint': 'I', 'int': 'i'}
+    form_str += ''.join(ply_types[t] for t in typeorder)
+
+    head = [line[2] for line in head if line[0] == 'property']
+    cols = {'r': 'red', 'g': 'green', 'b': 'blue'}
+    if any(l.startswith('diffuse_') for l in head):
+        cols = {k: 'diffuse_'+v for k, v in cols.items()}
+    ind = {c: head.index(c) for c in 'xyz'}
+    ind.update({c: head.index(cols[c]) for c in 'rgb'})
+    ind = tuple(ind[c] for c in 'xyzrgb')
+
+    return struct.Struct(form_str), ind, offset
 
 
 def _read_ply(fname):
     """Opens the specified file, and returns a point set in the format required
     by attributes_from_cloud.  Only handles xyzrgb point clouds, but that's
     a fine subset of the format.  See http://paulbourke.net/dataformats/ply/"""
-    check_input(fname, '.ply')
+    _check_input(fname, '.ply')
     with open(fname, 'rb') as f:
         raw_header = []
         while True:
-            raw_header.append(next(f))
-            if raw_header[-1].startswith(b'end_header'):
-                # ply files can have basically any line ending...
+            raw_header.append(next(f).decode('ascii'))
+            if raw_header[-1].strip() == 'end_header':
                 break
-        is_bin, point, ind, _ = _process_header(raw_header)
-        if not is_bin:
-            # ASCII mode
-            for line in f:
-                data = line.strip().split(b' ')
-                p_tup = tuple(t(n) for t, n in zip(point, data))
-                yield tuple(p_tup[i] for i in ind)
-            return
-        # Binary mode
+        point, ind, _ = _process_header(raw_header)
         raw = f.read(point.size)
         if ind == tuple(range(6)):  # Faster in the most common case
             while raw:
@@ -162,25 +135,52 @@ def _read_ply(fname):
 
 
 class IncrementalWriter(object):
-    """Allows O(n) splitting to subfiles per tree."""
+    """A streaming file writer for point clouds.
 
-    def __init__(self, filename, utm_coords=None):
+    Using the IncrementalWriter with spooled temporary files, which are
+    only flushed to disk if they go above the given size, allows for
+    streaming points to disk even when the header is unknown in advance.
+    This allows some nice tricks, including splitting a point cloud into
+    multiple files in a single pass, without memory issues.
+
+    Args:
+        filename: final place to save the file on disk.  Parent directory
+            must exist.  This file will not be created until the
+            :py:meth:`save_to_disk` method is called.
+        utm_coords: The (x, y, z, zone) offset added to find the
+            UTM coordinates of each point.
+        buffer (int): The number of bytes to hold in RAM before flushing
+            the temporary file to disk.  Default 1MB, which holds ~8300
+            points - enough for most objects but still practical to hold
+            thousands in memory.  Set a smaller buffer for large forests.
+    """
+
+    def __init__(self, filename, utm_coords=None, buffer=2**22):
         """Set up the object."""
+        if not os.path.isdir(os.path.dirname(filename)):
+            raise FileNotFoundError('Parent directory of the given filename '
+                                    'must exist.')
         self.filename = filename
-        self.temp_storage = SpooledTemporaryFile(max_size=2**20, mode='w+b')
+        self.temp_storage = SpooledTemporaryFile(max_size=buffer, mode='w+b')
         self.count = 0
         self.binary = struct.Struct('<fffBBB')
         self.utm_coords = utm_coords
 
     def __call__(self, point):
-        """Add a single point to this pointcloud."""
+        """Add a single point to this pointcloud, saving in binary format.
+
+        Args:
+            point: a six-element tuple of (x, y, x, red, green, blue) values,
+                in that order.  (x, y, z) values are coerced to 32-bit floats.
+                (red, green, blue) values are coerced to 8-bit unsigned ints.
+        """
         self.temp_storage.write(self.binary.pack(*point))
         self.count += 1
 
     def save_to_disk(self):
         """Flush data to disk and clean up."""
-        self.temp_storage.seek(0)
-        head = ['ply', 'format binary_little_endian 1.0',
+        head = ['ply',
+                'format binary_little_endian 1.0',
                 'element vertex {}'.format(self.count),
                 'property float x',
                 'property float y',
@@ -188,12 +188,13 @@ class IncrementalWriter(object):
                 'property uchar red',
                 'property uchar green',
                 'property uchar blue',
-                'end_header', '']
+                'end_header']
         if self.utm_coords is not None and len(self.utm_coords) == 4:
             head.insert(-2, 'comment UTM_easting UTM_northing altitude zone ' +
                         '{:.2f} {:.2f} {:.2f} {:d}'.format(*self.utm_coords))
         with open(self.filename, 'wb') as f:
-            f.write('\n'.join(head).encode('ascii'))
+            f.write(('\n'.join(head) + '\n').encode('ascii'))
+            self.temp_storage.seek(0)
             chunk = self.temp_storage.read(8192)
             while chunk:
                 f.write(chunk)
@@ -206,5 +207,4 @@ def write(cloud, fname, utm_coords=None):
     writer = IncrementalWriter(fname, utm_coords)
     for p in cloud:
         writer(p)
-    writer.close()
-
+    writer.save_to_disk()
