@@ -10,29 +10,19 @@ Returns generator objects, which yield points, due to out-of-memory issues.
 import struct
 import os.path
 from tempfile import SpooledTemporaryFile
-from collections import namedtuple
 
-UTM_offset = namedtuple('UTM_offset', ['x', 'y', 'z', 'zone'])
+from utm_convert import UTM_coords
 
 
-def UTM_offset_for(filename, zone=55):
+def _offset_for(filename):
     """Return the (x, y, z) offset for a Pix4D .ply cloud."""
-    with open(filename, 'rb') as f:
-        raw_header = []
-        while True:
-            raw_header.append(next(f))
-            if raw_header[-1].startswith(b'end_header'):
-                # ply files can have basically any line ending...
-                break
-        offset = _process_header(raw_header)[-1]
-    if isinstance(offset, UTM_offset) and offset is not None:
-        return offset
     offset = filename[:-4] + '_ply_offset.xyz'
-    if not os.path.isfile(offset):
-        return UTM_offset(0, 0, 0, zone)
-    with open(offset) as f:
-        x, y, z = (float(n) for n in f.readline().strip().split(' '))
-        return UTM_offset(x, y, z, zone)
+    try:
+        with open(offset) as f:
+            x, y, z = tuple(float(n) for n in f.readline().strip().split(' '))
+            return x, y, z
+    except FileNotFoundError:
+        return 0, 0, 0
 
 
 def _check_input(fname, ending=''):
@@ -60,25 +50,40 @@ def read(fname):
 
 
 def _read_pix4d_ply_parts(fname_list):
-    """Read from a collection of ply files as if they were one file.
-    Pix4D usually exports point clouds in parts, with a UTM offset for the
-    origin.  We can thus read from all (though only write to one file."""
+    """Yield points from a list of Pix4D ply files as if they were one file.
+
+    Pix4D usually exports point clouds in parts, with an xyz offset for the
+    origin.  This means that we can yield the points from each, correcting
+    for the offset in the origin coordinate in each.
+
+    We can further move the altitude information into the points without loss
+    of precision (to any significant degree).  However UTM XY coordinates
+    can't be added; we don't know the UTM zone and loss of precision may
+    be noticible if we did.
+    """
     for f in fname_list:
         _check_input(f, '.ply')
     first = fname_list.pop(0)
+    ox, oy, oz = _offset_for(first)
     for point in _read_ply(first):
-        yield point
+        x, y, z, r, g, b = point
+        yield x, y, z+oz, r, g, b
     for f in fname_list:
-        dx, dy, dz, _ = [b - a for a, b in
-                         zip(UTM_offset_for(first), UTM_offset_for(f))]
+        dx, dy, dz = [b - a for a, b in zip([ox, oy, 0], _offset_for(f))]
         for x, y, z, r, g, b in _read_ply(f):
             yield x+dx, y+dy, z+dz, r, g, b
 
 
-def _process_header(head):
+def process_header(file_handle):
     """Return key information from a list of bytestrings (the raw header);
     a Struct format string (empty == ascii mode), and the index order tuple."""
-    head = [line.strip().split(b' ') for line in head]
+    head = []
+    while True:
+        head.append(next(file_handle).decode())
+        if head[-1].strip() == 'end_header':
+            break
+
+    head = [line.strip().split(' ') for line in head]
     is_big_endian = ['format', 'binary_big_endian', '1.0'] in head
     while not head[-1] == ['end_header']:
         head.pop()
@@ -87,9 +92,9 @@ def _process_header(head):
 
     offset = None
     for line in head:
-        if line[:4] == ['comment', 'UTM', 'easting', 'northing']:
-            x, y, z, zone = line[-4:]
-            offset = UTM_offset(float(x), float(y), float(z), int(zone))
+        if line[:6] == ['comment', 'UTM', 'x', 'y', 'zone', 'south']:
+            x, y, zone, S = line[-4:]
+            offset = UTM_coords(float(x), float(y), int(zone), bool(int(S)))
 
     typeorder = [line[1] for line in head if line[0] == 'property']
     form_str = '>' if is_big_endian else '<'
@@ -116,12 +121,7 @@ def _read_ply(fname):
     a fine subset of the format.  See http://paulbourke.net/dataformats/ply/"""
     _check_input(fname, '.ply')
     with open(fname, 'rb') as f:
-        raw_header = []
-        while True:
-            raw_header.append(next(f).decode('ascii'))
-            if raw_header[-1].strip() == 'end_header':
-                break
-        point, ind, _ = _process_header(raw_header)
+        point, ind, _ = process_header(f)
         raw = f.read(point.size)
         if ind == tuple(range(6)):  # Faster in the most common case
             while raw:
@@ -164,7 +164,10 @@ class IncrementalWriter(object):
         self.temp_storage = SpooledTemporaryFile(max_size=buffer, mode='w+b')
         self.count = 0
         self.binary = struct.Struct('<fffBBB')
-        self.utm_coords = utm_coords
+        try:
+            self.utm_coords = UTM_coords(*utm_coords)
+        except AssertionError:
+            self.utm_coords = None
 
     def __call__(self, point):
         """Add a single point to this pointcloud, saving in binary format.
@@ -189,9 +192,10 @@ class IncrementalWriter(object):
                 'property uchar green',
                 'property uchar blue',
                 'end_header']
-        if self.utm_coords is not None and len(self.utm_coords) == 4:
-            head.insert(-2, 'comment UTM_easting UTM_northing altitude zone ' +
-                        '{:.2f} {:.2f} {:.2f} {:d}'.format(*self.utm_coords))
+        if self.utm_coords is not None:
+            x, y, zone, south = self.utm_coords
+            head.insert(-2, 'comment UTM x y zone south {:.2f} {:.2f} {:d} {}'
+                        .format(x, y, zone, '1' if south else '0'))
         with open(self.filename, 'wb') as f:
             f.write(('\n'.join(head) + '\n').encode('ascii'))
             self.temp_storage.seek(0)

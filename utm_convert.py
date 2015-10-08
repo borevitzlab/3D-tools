@@ -6,6 +6,7 @@ http://home.hiwaay.net/~taylorc/toolbox/geography/geoutm.html
 """
 
 import argparse
+from collections import namedtuple
 import math
 
 try:
@@ -33,17 +34,28 @@ sm_a = 6378137
 sm_b = 6356752.314
 UTMScaleFactor = 0.9996
 
+# Defining this every time we instantiate one is too slow
+__utm = namedtuple('UTM_coords', ['x', 'y', 'zone', 'south'])
+
+
+def UTM_coords(x, y, zone, south):
+    """Return a namedtuple of valid values for a UTM coordinate."""
+    assert 0 <= x <= UTM_MAX_VAL
+    assert 0 <= y <= UTM_MAX_VAL
+    assert zone in range(1, 61)
+    assert isinstance(south, bool)
+    return __utm(x, y, zone, south)
+
 
 def ArcLengthOfMeridian(phi):
-    '''Computes the ellipsoidal distance from the equator to a point at a
-    given latitude.
+    """Compute the ellipsoidal distance from the equator to a given latitude.
 
     Args:
         phi (radians): Latitude of the point.
 
     Returns:
         (meters): The ellipsoidal distance of the point from the equator.
-    '''
+    """
     n = (sm_a - sm_b) / (sm_a + sm_b)
     alpha = ((sm_a + sm_b) / 2) * (1 + n**2 / 4) + n**4 / 64
     beta = -3 * n / 2 + 9 * n**3 / 16 - 3 * n**5 / 32
@@ -147,7 +159,7 @@ def LatLonToUTMXY(lat, lon):
         lon (radians): Longitude of the point.
 
     Returns:
-        2-element tuple of x and y coordinates in meters, and the UTM zone.
+        A UTM_coords namedtuple for the corresponding point.
     '''
     zone = int((math.degrees(lon)+183) / 6)
     if zone < 1:
@@ -163,7 +175,7 @@ def LatLonToUTMXY(lat, lon):
     if y < 0:
         y += UTM_MAX_VAL
         south = True
-    return (x, y), zone, south
+    return UTM_coords(x, y, zone, south)
 
 
 @given(st_lats, st_lons)
@@ -171,11 +183,9 @@ def test_LatLonToUTMXY(lat, lon):
     # TODO:  work out why this assumption is required; fix it. (zone related?)
     # Low priority, since the code is never called with such values.
     assume(math.radians(-177) <= lon)
-    xy, zone, south = LatLonToUTMXY(lat, lon)
-    assert zone in range(1, 61), (zone, lon)
-    for i in xy:
-        assert 0 <= i <= UTM_MAX_VAL, xy
-    assert south == (lat < 0), (lat, south)
+    utm = LatLonToUTMXY(lat, lon)
+    # UTM_coords() checks values, this checks correct transform
+    assert utm.south == (lat < 0), (lat, utm.south)
 
 
 def MapXYToLatLon(x, y, lambda_0):

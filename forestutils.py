@@ -9,7 +9,7 @@ import statistics
 
 import matchtrees
 import pointcloudfile
-from utm_convert import UTM_to_LatLon
+from utm_convert import UTM_coords, UTM_to_LatLon
 
 
 class MapObj(object):
@@ -17,20 +17,28 @@ class MapObj(object):
     cells.  Hides data structure and accessed through coordinates."""
     # pylint:disable=too-many-instance-attributes
 
-    def __init__(self, input_file, colours=True, prev_csv=None):
+    def __init__(self, input_file, colours=True, *,
+                 prev_csv=None, zone=55, south=True):
         """Initialises data"""
+        self.file = input_file
         self.canopy = dict()
         self.density = dict()
         self.ground = dict()
         self.colours = dict()
         self.trees = dict()
+
         self.prev_trees = []
         if prev_csv is not None:
             if os.path.isfile(prev_csv):
                 self.prev_trees = list(
                     matchtrees.name_loc_list_from_csv(prev_csv))
-        self.file = input_file
-        self.offset = pointcloudfile.UTM_offset_for(self.file, args.utmzone)
+
+        with open(self.file, 'rb') as fh:
+            self.offset = pointcloudfile.process_header(fh)[-1]
+        if self.offset is None:
+            x, y, _ = pointcloudfile._offset_for(self.file)
+            self.offset = UTM_coords(x, y, zone, south)
+
         self.update_spatial()
         if colours:
             self.update_colours()
