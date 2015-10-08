@@ -12,6 +12,15 @@ import pointcloudfile
 from utm_convert import UTM_coords, UTM_to_LatLon
 
 
+def coords(pos):
+    """Return a tuple of integer coordinates as keys for the dict/map.
+    * pos can be a full point tuple, or just (x, y)
+    * use floor() to avoid imprecise float issues"""
+    x = math.floor(pos[0] / args.cellsize)
+    y = math.floor(pos[1] / args.cellsize)
+    return x, y
+
+
 class MapObj(object):
     """Stores a maximum and minimum height map of the cloud, in GRID_SIZE
     cells.  Hides data structure and accessed through coordinates."""
@@ -36,7 +45,7 @@ class MapObj(object):
         with open(self.file, 'rb') as fh:
             self.offset = pointcloudfile.process_header(fh)[-1]
         if self.offset is None:
-            x, y, _ = pointcloudfile._offset_for(self.file)
+            x, y, _ = pointcloudfile.offset_for(self.file)
             self.offset = UTM_coords(x, y, zone, south)
 
         self.update_spatial()
@@ -48,7 +57,7 @@ class MapObj(object):
         # Fill out the spatial info in the file
         for point in pointcloudfile.read(self.file):
             z = point[2]
-            idx = self.coords(point)
+            idx = coords(point)
             if self.density.get(idx) is None:
                 self.density[idx] = 1
                 self.canopy[idx] = z
@@ -67,28 +76,19 @@ class MapObj(object):
         for x, y, z, r, g, b in pointcloudfile.read(self.file):
             if self.is_ground([x, y, z]):
                 continue
-            idx = self.coords([x, y])
+            idx = coords([x, y])
             R, G, B = self.colours.get(idx, (0, 0, 0))
             self.colours[idx] = (R+r, G+g, B+b)
-
-    @staticmethod
-    def coords(pos):
-        """Return a tuple of integer coordinates as keys for the dict/map.
-        * pos can be a full point tuple, or just (x, y)
-        * use floor() to avoid imprecise float issues"""
-        x = math.floor(pos[0] / args.cellsize)
-        y = math.floor(pos[1] / args.cellsize)
-        return x, y
 
     def is_ground(self, point):
         """Returns boolean whether the point is not classified as ground - ie
         True if within GROUND_DEPTH of the lowest point in the cell.
         If not lossy, also true for lowest ground point in a cell."""
-        return point[2] - self.ground[self.coords(point)] < args.grounddepth
+        return point[2] - self.ground[coords(point)] < args.grounddepth
 
     def is_lowest(self, point):
         """Returns boolean whether the point is lowest in that grid cell."""
-        return point[2] == self.ground[self.coords(point)]
+        return point[2] == self.ground[coords(point)]
 
     def __len__(self):
         """Total observed points."""
@@ -252,7 +252,7 @@ class MapObj(object):
         for point in pointcloudfile.read(self.file):
             if not self.is_ground(point):
                 continue
-            val = self.trees.get(self.coords(point))
+            val = self.trees.get(coords(point))
             if val is not None:
                 tree_to_file[val](point)
         for writer in set(tree_to_file.values()):

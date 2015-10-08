@@ -14,7 +14,7 @@ from tempfile import SpooledTemporaryFile
 from utm_convert import UTM_coords
 
 
-def _offset_for(filename):
+def offset_for(filename):
     """Return the (x, y, z) offset for a Pix4D .ply cloud."""
     offset = filename[:-4] + '_ply_offset.xyz'
     try:
@@ -64,12 +64,12 @@ def _read_pix4d_ply_parts(fname_list):
     for f in fname_list:
         _check_input(f, '.ply')
     first = fname_list.pop(0)
-    ox, oy, oz = _offset_for(first)
+    ox, oy, oz = offset_for(first)
     for point in _read_ply(first):
         x, y, z, r, g, b = point
         yield x, y, z+oz, r, g, b
     for f in fname_list:
-        dx, dy, dz = [b - a for a, b in zip([ox, oy, 0], _offset_for(f))]
+        dx, dy, dz = [b - a for a, b in zip([ox, oy, 0], offset_for(f))]
         for x, y, z, r, g, b in _read_ply(f):
             yield x+dx, y+dy, z+dz, r, g, b
 
