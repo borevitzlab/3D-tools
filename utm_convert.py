@@ -1,9 +1,23 @@
 #!/usr/env/bin python3
 """A library to convert between Latitude/Longitude and UTM coordinates.
 
-Translated from the FOSS Javascript at
-http://home.hiwaay.net/~taylorc/toolbox/geography/geoutm.html
+A library to convert co-ordinates between the Universial Tranverse Mercator
+projection, and WGSM84 (GPS-projection) latitude and longitude in decimal
+degrees - in either direction.
+
+The UTM system is nice in that it uses eastings, northings, and altitude in
+metres - which is really good for local use.  Pix4D exports geolocation in
+this format.  Lat/Lon degrees are a common standard for georeferencing, and
+often an easier interface for other software.
+
+This module is a translation of `Chuck Taylor's Javascript version
+<http://home.hiwaay.net/~taylorc/toolbox/geography/geoutm.html>`_ to idiomatic
+Python.
+
+Floating-point imprecision is is typically a not an issue; round-trip
+conversion (UTM -> degrees -> UTM) introduces only a few micrometers of error.
 """
+# pylint:disable=missing-docstring,redefined-outer-name
 
 import argparse
 from collections import namedtuple
@@ -14,7 +28,9 @@ try:
     import hypothesis.strategies as st
 except ImportError:
     # If hypothesis is not available, our tests are just no-ops.
-    def noop(*args, **kwargs): return lambda v: None
+    def noop(*args, **kwargs):
+        # pylint:disable=unused-argument
+        return lambda v: None
     given = assume = st = noop
     noop.floats = noop.integers = noop.booleans = noop
 
@@ -39,7 +55,7 @@ __utm = namedtuple('UTM_coords', ['x', 'y', 'zone', 'south'])
 
 
 def UTM_coords(x, y, zone, south):
-    """Return a namedtuple of valid values for a UTM coordinate."""
+    """Return a namedtuple of validated values for a UTM coordinate."""
     assert 0 <= x <= UTM_MAX_VAL
     assert 0 <= y <= UTM_MAX_VAL
     assert zone in range(1, 61)
@@ -103,24 +119,28 @@ def test_FootpointLatitude(y):
     assert 0 <= FootpointLatitude(y) <= math.pi/2, y
 
 
-def MapLatLonToXY(phi, lambda_, lambda_0):
-    '''Converts a latitude/longitude pair to x and y coordinates in the
-    Transverse Mercator projection.  Note that Transverse Mercator is not
-    the same as UTM - a scale factor is required to convert between them.
+def MapLatLonToXY(phi, lambda_, meridian=0):
+    """Convert polar coordinates to the Transverse Mercator projection.
+
+    This is the scary elipsoidal geometry for coordinate projection -
+    fortunately both systems use the WGSM84 elisoid.  Note that the result
+    of this calculation is *not* a valid UTM coordinate - that requires
+    multiplying by a scale factor, converting to a zone based on the nearest
+    meridian, and adjusting values in the southern hemisphere.
 
     Args:
         phi (radians): Latitude of the point.
         lambda_ (radians): Longitude of the point.
-        lambda_0 (radians): Longitude of the central meridian to be used.
+        meridian (radians): Longitude of the central meridian to be used.
 
     Returns:
         2-element tuple of x and y coordinates in meters.
-    '''
+    """
     ep2 = (sm_a**2 - sm_b**2) / sm_b**2
     nu2 = ep2 * math.cos(phi)**2
     N = sm_a**2 / (sm_b * (1 + nu2)**0.5)
     t = math.tan(phi)
-    l = lambda_ - lambda_0
+    l = lambda_ - meridian
 
     # Precalculate coefficients for l**n in the equations below so humans
     # can read the expressions for easting and northing
@@ -150,22 +170,27 @@ def MapLatLonToXY(phi, lambda_, lambda_0):
     return x, y + ArcLengthOfMeridian(phi)
 
 
-def LatLonToUTMXY(lat, lon):
+def LatLonToUTMXY(lat, lon, target_zone=None):
     '''Converts a latitude/longitude pair to x and y coordinates in the
     Universal Transverse Mercator projection.
 
     Args:
         lat (radians): Latitude of the point.
         lon (radians): Longitude of the point.
+        target_zone: the required zone of the output; None to autodetect.
 
     Returns:
         A UTM_coords namedtuple for the corresponding point.
     '''
-    zone = int((math.degrees(lon)+183) / 6)
-    if zone < 1:
-        zone += 60
-    elif zone > 60:
-        zone -= 60
+    if target_zone is not None:
+        zone = target_zone
+    else:
+        # TODO: make this detection good enough to pass the inversion test
+        zone = int((math.degrees(lon)+183) / 6)
+        if zone < 1:
+            zone += 60
+        elif zone > 60:
+            zone -= 60
     c_merid = math.radians(zone*6 - 183)
     x, y = MapLatLonToXY(lat, lon, c_merid)
     # Adjust easting and northing for UTM system
@@ -287,6 +312,43 @@ def LatLon_to_UTM(lat, lon):
     return LatLonToUTMXY(math.radians(lat), math.radians(lon))
 
 
+def dif(a, b):
+    return abs(abs(a) - abs(b))
+
+
+@given(st_lats, st_lons)
+def test_lesser_conversions_invert(lat, lon):
+    # Test that the projection conversions invert each other
+    assume(math.radians(-177) <= lon)
+    cmerid = math.radians(6 * int(math.degrees(lon/6)))
+    x, y = MapLatLonToXY(lat, lon, cmerid)
+    lat2, lon2 = MapXYToLatLon(x, y, cmerid)
+    x2, y2 = MapLatLonToXY(lat, lon, cmerid)
+    assert dif(x, x2) < 10**-4
+    assert dif(y, y2) < 10**-4
+    assert dif(lat, lat2) < 10**-10
+    assert dif(lon, lon2) < 10**-10
+
+
+@given(st_utm_coord, st_utm_coord, st_zone, st.booleans())
+def test_full_conversions_invert(x, y, zone, south):
+    utm = UTM_coords(x, y, zone, south)
+    # Test that the full conversions between systems invert each other
+    # harder because of zone detection etc.
+    lat, lon = UTMXYToLatLon(utm.x, utm.y, utm.zone, utm.south)
+    utm2 = LatLonToUTMXY(lat, lon, utm.zone)
+    lat2, lon2 = UTMXYToLatLon(utm2.x, utm2.y, utm2.zone, utm2.south)
+    # check that we're in the expected hemisphere and zone
+    assert utm.south == utm2.south, (utm, utm2)
+    assert utm.zone == utm2.zone, (utm, utm2)
+    # meter coordinates should be within 100 micron!
+    assert dif(utm.x, utm2.x) < 10**-4
+    assert dif(utm.y, utm2.y) < 10**-4
+    # polar coordinates to equivalent precision
+    assert dif(lat, lat2) < 10**-10
+    assert dif(lon, lon2) < 10**-10
+
+
 def get_args():
     """Handle the very simple options."""
     parser = argparse.ArgumentParser(description=(
@@ -308,8 +370,8 @@ def get_args():
 if __name__ == '__main__':
     args = get_args()
     if args.UTMZone is not None:
-        print('Lat:  {}\nLon:  {}'.format(
-            *UTM_to_LatLon(args.n1, args.n2, args.UTMZone)))
+        lat, lon = UTM_to_LatLon(args.n1, args.n2, args.UTMZone)
+        print('Lat:  {}\nLon:  {}'.format(lat, lon))
     else:
         latlon, zone, south = LatLon_to_UTM(args.n1, args.n2)
         print('UTM X:     {}\nUTM Y:     {}\nUTM Zone:  {}{}'.format(

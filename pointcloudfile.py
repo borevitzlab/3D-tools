@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""A specialised io module for .ply files containing XYZRGB points.
+"""A specialised io module for binary ``.ply`` files containing XYZRGB points.
 
-This is useful for all the example forest data I've seen so far, and is
-easy enough to extend later for other attributes.
+Most uses of this module should go through :py:func:`read` to iterate over
+points in the file, or :py:func:`write` to save an iterable of points.
+Neither function accumulates much data in memory.
 
-Returns generator objects, which yield points, due to out-of-memory issues.
+:py:class:`IncrementalWriter` is useful when accumulating data in memory to
+write many files is impractical.  :py:func:`offset_for` and
+:py:func:`read_header` provide location metadata if possible.
+
+In all cases a "point" is tuple of (x, y, z, r, g, b).  XYZ are floats denoting
+spatial coordinates.  RGB is the color, each an unsigned 8-bit integer.
+While intentionally limited in scope, most data can be converted to this
+format easily enough.
 """
 
 import struct
@@ -63,9 +71,9 @@ def _read_pix4d_ply_parts(fname_list):
     """
     for f in fname_list:
         _check_input(f, '.ply')
-    first = fname_list.pop(0)
-    ox, oy, oz = offset_for(first)
-    for point in _read_ply(first):
+    f = fname_list.pop(0)
+    ox, oy, oz = offset_for(f)
+    for point in _read_ply(f):
         x, y, z, r, g, b = point
         yield x, y, z+oz, r, g, b
     for f in fname_list:
@@ -75,8 +83,17 @@ def _read_pix4d_ply_parts(fname_list):
 
 
 def process_header(file_handle):
-    """Return key information from a list of bytestrings (the raw header);
-    a Struct format string (empty == ascii mode), and the index order tuple."""
+    """Return key information from the header of an open ``.ply`` file.
+
+    Args:
+        file_handle: must be in binary read mode (``'rb'``), at start of file.
+
+    Returns:
+        (struct.Struct, indicies, offset): a tuple of ``struct`` instance for
+        the binary format of the file;  the respective indicies of XYZRGB
+        values within each element; and the UTM location of the pointcloud
+        origin coordinate (None if unknown).
+    """
     head = []
     while True:
         head.append(next(file_handle).decode())
@@ -182,6 +199,7 @@ class IncrementalWriter(object):
 
     def save_to_disk(self):
         """Flush data to disk and clean up."""
+        # TODO:  could this be a __del__ method??
         head = ['ply',
                 'format binary_little_endian 1.0',
                 'element vertex {}'.format(self.count),

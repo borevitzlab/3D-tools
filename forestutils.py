@@ -1,5 +1,26 @@
 #!/usr/bin/env python3
-"""Tools for analysing forest point clouds."""
+"""Tools for analysing forest point clouds.
+
+Inputs: a coloured pointcloud in ``.ply`` format (XYZRGB vertices), which
+can be obtained by putting images from drone photography through
+structure-from-motion software.
+
+Outputs (most are optional):
+
+* A 'sparse' point cloud, with most ground points discarded.  This eases
+  further analysis, storage, etc without compromising coverage of vegetation.
+* A ``.csv`` file listing identified trees, with traits including location,
+  height, canopy area, colour, and point count.
+* Individual files containing the point cloud for each tree.
+
+Extensive use of mutable coordinate-property mappings and streamed input
+ensure that even files to large to load in memory can be processed.  In extreme
+cases, the resolution can be decreased to trade accuracy for memory.
+
+Example outputs (from an older version):
+`a map <https://www.google.com/maps/d/viewer?mid=z1pH7HaTWL9Q.kzQflQGYVRIU>`_,
+and `pointclouds <http://phenocam.org.au/pointclouds>`_.
+"""
 
 import argparse
 import csv
