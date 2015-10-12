@@ -63,6 +63,15 @@ def UTM_coords(x, y, zone, south):
     return __utm(x, y, zone, south)
 
 
+def dif(a, b):
+    return abs(abs(a) - abs(b))
+
+
+def wrap(L, i):
+    """Wrap overflowing coordinates around the sphere."""
+    return ((L + math.pi/i) % 2*math.pi/i) - math.pi/i
+
+
 def ArcLengthOfMeridian(phi):
     """Compute the ellipsoidal distance from the equator to a given latitude.
 
@@ -101,22 +110,31 @@ def FootpointLatitude(y):
         (radians): The footpoint latitude.
     '''
     n = (sm_a - sm_b) / (sm_a + sm_b)
-    alpha_ = 0.5 * (sm_a + sm_b) * (1 + n**2 / 4 + n**4 / 64)
-    y_ = y / alpha_
+    y /= 0.5 * (sm_a + sm_b) * (1 + n**2 / 4 + n**4 / 64)
     beta_ = 3 * n / 2 - 27 * n**3 / 32 + 269 * n**5 / 512
     gamma_ = 21 * n**2 / 16 - 55 * n**4 / 32
     delta_ = 151 * n**3 / 96 - 417 * n**5 / 128
     epsilon_ = 1097 * n**4 / 512
-    return sum([y_,
-                beta_ * math.sin(2 * y_),
-                gamma_ * math.sin(4 * y_),
-                delta_ * math.sin(6 * y_),
-                epsilon_ * math.sin(8 * y_)])
+    return sum([y,
+                beta_ * math.sin(2 * y),
+                gamma_ * math.sin(4 * y),
+                delta_ * math.sin(6 * y),
+                epsilon_ * math.sin(8 * y)])
 
 
 @given(st_utm_coord)
 def test_FootpointLatitude(y):
     assert 0 <= FootpointLatitude(y) <= math.pi/2, y
+
+
+@given(st_lats)
+def test_lat_converstions(lat):
+    # test that converting from lat, to distance and back is correct
+    dist = ArcLengthOfMeridian(lat)
+    lat2 = FootpointLatitude(dist)
+    dist2 = ArcLengthOfMeridian(lat2)
+    assert dif(dist, dist2) < 10**-4
+    assert dif(lat, lat2) < 10**-10
 
 
 def MapLatLonToXY(phi, lambda_, meridian=0):
@@ -185,7 +203,6 @@ def LatLonToUTMXY(lat, lon, target_zone=None):
     if target_zone is not None:
         zone = target_zone
     else:
-        # TODO: make this detection good enough to pass the inversion test
         zone = int((math.degrees(lon)+183) / 6)
         if zone < 1:
             zone += 60
@@ -197,7 +214,7 @@ def LatLonToUTMXY(lat, lon, target_zone=None):
     x = x * UTMScaleFactor + UTM_MAX_VAL/20
     y *= UTMScaleFactor
     south = False
-    if y < 0:
+    if lat < 0:
         y += UTM_MAX_VAL
         south = True
     return UTM_coords(x, y, zone, south)
@@ -205,9 +222,6 @@ def LatLonToUTMXY(lat, lon, target_zone=None):
 
 @given(st_lats, st_lons)
 def test_LatLonToUTMXY(lat, lon):
-    # TODO:  work out why this assumption is required; fix it. (zone related?)
-    # Low priority, since the code is never called with such values.
-    assume(math.radians(-177) <= lon)
     utm = LatLonToUTMXY(lat, lon)
     # UTM_coords() checks values, this checks correct transform
     assert utm.south == (lat < 0), (lat, utm.south)
@@ -255,20 +269,17 @@ def MapXYToLatLon(x, y, lambda_0):
         7: -61 - 662 * tf**2 - 1320 * tf**4 - 720 * tf**6,
         8: 1385 + 3633 * tf**2 + 4095 * tf**4 + 1575 * tf**6}
     # Calculate latitude and longitude
-    lat = phif + sum(frac[n] * poly[n] * x**n for n in [2, 4, 6, 8])
-    lon = lambda_0 + sum(frac[n] * poly[n] * x**n for n in [1, 3, 5, 7])
-
-    def wrap(L, i):
-        """Wrap overflowing coordinates around the sphere."""
-        return ((L + math.pi/i) % 2*math.pi/i) - math.pi/i
-    return wrap(lat, 2), wrap(lon, 1)
+    return (phif + sum(frac[n] * poly[n] * x**n for n in [2, 4, 6, 8]),
+            lambda_0 + sum(frac[n] * poly[n] * x**n for n in [1, 3, 5, 7]))
 
 
 @given(st_utm_coord, st_utm_coord, st_lons)
 def test_MapXYToLatLon(x, y, lambda_0):
     lat, lon = MapXYToLatLon(x, y, lambda_0)
-    assert -math.pi/2 <= lat <= math.pi/2
-    assert -math.pi <= lon <= math.pi
+    # TODO:  condition is a 'well formed' UTM coordinate
+    if False:
+        assert -math.pi/2 <= lat <= math.pi/2
+        assert -math.pi <= lon <= math.pi
 
 
 def UTMXYToLatLon(x, y, zone, south):
@@ -298,13 +309,16 @@ def UTMXYToLatLon(x, y, zone, south):
 @given(st_utm_coord, st_utm_coord, st_zone, st.booleans())
 def test_UTMXYToLatLon(x, y, zone, south):
     lat, lon = UTMXYToLatLon(x, y, zone, south)
-    assert -math.pi/2 <= lat <= math.pi/2
-    assert -math.pi <= lon <= math.pi
+    # TODO:  condition is a 'well formed' UTM coordinate
+    if False:
+        assert -math.pi/2 <= lat <= math.pi/2
+        assert -math.pi <= lon <= math.pi
 
 
 def UTM_to_LatLon(x, y, zone=55, south=True):
     """Take xy values in UTM (default zone S55), and return lat and lon."""
-    return tuple(math.degrees(n) for n in UTMXYToLatLon(x, y, zone, south))
+    lat, lon = UTMXYToLatLon(x, y, zone, south)
+    return math.degrees(wrap(lat, 2)), math.degrees(wrap(lon, 1))
 
 
 def LatLon_to_UTM(lat, lon):
@@ -312,18 +326,14 @@ def LatLon_to_UTM(lat, lon):
     return LatLonToUTMXY(math.radians(lat), math.radians(lon))
 
 
-def dif(a, b):
-    return abs(abs(a) - abs(b))
-
-
-@given(st_lats, st_lons)
+@given(st_lats, st.floats(min_value=-math.pi/120, max_value=math.pi/120))
 def test_lesser_conversions_invert(lat, lon):
     # Test that the projection conversions invert each other
-    assume(math.radians(-177) <= lon)
+    assume(-FootpointLatitude(10**7) < lat < FootpointLatitude(10**7))
     cmerid = math.radians(6 * int(math.degrees(lon/6)))
     x, y = MapLatLonToXY(lat, lon, cmerid)
     lat2, lon2 = MapXYToLatLon(x, y, cmerid)
-    x2, y2 = MapLatLonToXY(lat, lon, cmerid)
+    x2, y2 = MapLatLonToXY(lat2, lon2, cmerid)
     assert dif(x, x2) < 10**-4
     assert dif(y, y2) < 10**-4
     assert dif(lat, lat2) < 10**-10
