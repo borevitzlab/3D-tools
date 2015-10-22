@@ -49,7 +49,17 @@ class MapObj(object):
 
     def __init__(self, input_file, colours=True, *,
                  prev_csv=None, zone=55, south=True):
-        """Initialises data"""
+        """
+        Args:
+            input_file (path): the ``.ply`` file to process.  If dealing with
+                Pix4D outputs, ``*_part_1.ply``.
+            colours (bool): whether to read colours from the file.  Set to
+                False for eg. LIDAR data where mean colour is not useful.
+            prev_csv (path): path to a csv file which associates a name
+                with coordinates, to correctly name detected trees.
+            zone (int): the UTM zone of the site.
+            south (bool): if the site is in the southern hemisphere.
+        """
         self.file = input_file
         self.canopy = dict()
         self.density = dict()
@@ -113,8 +123,6 @@ class MapObj(object):
 
     def __len__(self):
         """Total observed points."""
-        if not self.density:
-            return 0
         return sum(self.density.values())
 
     @staticmethod

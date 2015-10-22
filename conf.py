@@ -38,6 +38,9 @@ extensions = [
     'sphinx.ext.viewcode',
 ]
 
+# Automatic class documentation should also include the __init__ docstring
+autoclass_content = 'both'
+
 # Inline return types look nicer.
 napoleon_use_rtype = False
 

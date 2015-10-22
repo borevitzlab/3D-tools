@@ -159,21 +159,21 @@ class IncrementalWriter(object):
     streaming points to disk even when the header is unknown in advance.
     This allows some nice tricks, including splitting a point cloud into
     multiple files in a single pass, without memory issues.
-
-    Args:
-        filename: final place to save the file on disk.  Parent directory
-            must exist.  This file will not be created until the
-            :py:meth:`save_to_disk` method is called.
-        utm_coords: The (x, y, z, zone) offset added to find the
-            UTM coordinates of each point.
-        buffer (int): The number of bytes to hold in RAM before flushing
-            the temporary file to disk.  Default 1MB, which holds ~8300
-            points - enough for most objects but still practical to hold
-            thousands in memory.  Set a smaller buffer for large forests.
     """
 
     def __init__(self, filename, utm_coords=None, buffer=2**22):
-        """Set up the object."""
+        """
+        Args:
+            filename: final place to save the file on disk.  Parent directory
+                must exist.  This file will not be created until the
+                :py:meth:`save_to_disk` method is called.
+            utm_coords: The (x, y, z, zone) offset added to find the
+                UTM coordinates of each point.
+            buffer (int): The number of bytes to hold in RAM before flushing
+                the temporary file to disk.  Default 1MB, which holds ~8300
+                points - enough for most objects but still practical to hold
+                thousands in memory.  Set a smaller buffer for large forests.
+        """
         if not os.path.isdir(os.path.dirname(filename)):
             raise FileNotFoundError('Parent directory of the given filename '
                                     'must exist.')
