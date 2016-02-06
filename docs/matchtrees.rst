@@ -1,5 +1,5 @@
 matchtrees
 ##########
 
-.. automodule:: matchtrees
+.. automodule:: src.matchtrees
    :members:

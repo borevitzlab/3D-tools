@@ -1,5 +1,5 @@
 forestutils
 ###########
 
-.. automodule:: forestutils
+.. automodule:: src.forestutils
    :members:

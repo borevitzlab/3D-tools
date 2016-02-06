@@ -29,8 +29,8 @@ import os
 import statistics
 
 from . import matchtrees, pointcloudfile, utm_convert
-# import UTM_coords, UTM_to_LatLon
 
+args = None
 
 def coords(pos):
     """Return a tuple of integer coordinates as keys for the dict/map.
@@ -366,7 +366,8 @@ def main_processing():
     print('Done.')
 
 def main():
-    global args
+    """Interface to call from outside the package."""
+    global args #pylint:disable=global-statement
     args = get_args()
     if not os.path.isfile(args.file):
         raise IOError('Input file not found, ' + args.file)

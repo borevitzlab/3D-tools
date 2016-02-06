@@ -1,5 +1,5 @@
 pointcloudfile
 ##############
 
-.. automodule:: pointcloudfile
+.. automodule:: src.pointcloudfile
    :members:
