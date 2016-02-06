@@ -19,7 +19,7 @@ complex code.
 import argparse
 import csv
 
-from utm_convert import LatLon_to_UTM
+from . import utm_convert
 
 
 def name_from_location(in_list, new_loc, tolerance=1):
@@ -33,8 +33,9 @@ def name_from_location(in_list, new_loc, tolerance=1):
         The name of the closest location (if any) within tolerance, or None.
     """
     min_dist = 2 * tolerance
+    name = None
     for name, x, y in in_list:
-        dist_square = abs(new_loc[0] - x)**2 + abs(new_loc[1] - x)**2
+        dist_square = abs(new_loc[0] - x)**2 + abs(new_loc[1] - y)**2
         min_dist = min(min_dist, dist_square)
     return name if min_dist**0.5 <= tolerance else None
 
@@ -61,8 +62,8 @@ def name_loc_list_from_csv(fname):
             if 'utm_x' in row and 'utm_y' in row:
                 yield row[firstcol], float(row['utm_x']), float(row['utm_y'])
             elif 'latitude' in row and 'longitude' in row:
-                x, y, _ = LatLon_to_UTM(float(row['latitude']),
-                                        float(row['longitude']))
+                x, y, _ = utm_convert.LatLon_to_UTM(
+                    float(row['latitude']), float(row['longitude']))
                 yield row[firstcol], x, y
 
 
@@ -78,6 +79,8 @@ def paste_names_across_analyses(old_file, new_file, tolerance=1):
 
     NOT YET IMPLEMENTED
     """
+    #pylint:disable=unused-argument
+    # TODO:  Implement this function when test data is available
     raise NotImplementedError
 
 

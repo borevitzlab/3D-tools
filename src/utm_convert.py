@@ -24,7 +24,7 @@ are designed to highlight such problems, but in normal use it's fine.
 # pylint:disable=missing-docstring,redefined-outer-name
 
 import argparse
-from collections import namedtuple
+import collections
 import math
 
 try:
@@ -56,7 +56,7 @@ sm_b = 6356752.314
 UTMScaleFactor = 0.9996
 
 # Defining this every time we instantiate one is too slow
-__utm = namedtuple('UTM_coords', ['x', 'y', 'zone', 'south'])
+__utm = collections.namedtuple('UTM_coords', ['x', 'y', 'zone', 'south'])
 
 
 def UTM_coords(x, y, zone, south, validate=True):
@@ -351,12 +351,10 @@ def test_full_conversions_invert(x, y, zone, south):
     # harder because of zone detection etc.
     lat, lon = UTMXYToLatLon(utm.x, utm.y, utm.zone, utm.south)
     utm2 = LatLonToUTMXY(lat, lon, utm.zone)
-    lat2, lon2 = UTMXYToLatLon(utm2.x, utm2.y, utm2.zone, utm2.south)
     # check that we're in the expected hemisphere and zone
     assert utm.south == utm2.south, (utm, utm2)
     assert utm.zone == utm2.zone, (utm, utm2)
-    assert dif(lon, lon2) < 10**-10
-    # coordinate system conversion tested in the function above
+    # coordinate system conversion tested in test_lesser_conversions_invert
 
 
 def get_args():

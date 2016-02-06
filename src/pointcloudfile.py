@@ -19,7 +19,7 @@ import struct
 import os.path
 from tempfile import SpooledTemporaryFile
 
-from utm_convert import UTM_coords
+from . import utm_convert
 
 
 def offset_for(filename):
@@ -111,7 +111,8 @@ def process_header(file_handle):
     for line in head:
         if line[:6] == ['comment', 'UTM', 'x', 'y', 'zone', 'south']:
             x, y, zone, S = line[-4:]
-            offset = UTM_coords(float(x), float(y), int(zone), bool(int(S)))
+            offset = utm_convert.UTM_coords(
+                float(x), float(y), int(zone), bool(int(S)))
 
     typeorder = [line[1] for line in head if line[0] == 'property']
     form_str = '>' if is_big_endian else '<'
@@ -151,7 +152,7 @@ def _read_ply(fname):
                 raw = f.read(point.size)
 
 
-class IncrementalWriter(object):
+class IncrementalWriter:
     """A streaming file writer for point clouds.
 
     Using the IncrementalWriter with spooled temporary files, which are
@@ -160,6 +161,8 @@ class IncrementalWriter(object):
     This allows some nice tricks, including splitting a point cloud into
     multiple files in a single pass, without memory issues.
     """
+    #pylint:disable=too-few-public-methods
+    # TODO:  add methods to allow use as context manager ("with _ as _: ...")
 
     def __init__(self, filename, utm_coords=None, buffer=2**22):
         """
@@ -182,7 +185,7 @@ class IncrementalWriter(object):
         self.count = 0
         self.binary = struct.Struct('<fffBBB')
         try:
-            self.utm_coords = UTM_coords(*utm_coords)
+            self.utm_coords = utm_convert.UTM_coords(*utm_coords)
         except AssertionError:
             self.utm_coords = None
 

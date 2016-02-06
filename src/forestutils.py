@@ -28,9 +28,8 @@ import math
 import os
 import statistics
 
-import matchtrees
-import pointcloudfile
-from utm_convert import UTM_coords, UTM_to_LatLon
+from . import matchtrees, pointcloudfile, utm_convert
+# import UTM_coords, UTM_to_LatLon
 
 
 def coords(pos):
@@ -77,7 +76,7 @@ class MapObj(object):
             self.offset = pointcloudfile.process_header(fh)[-1]
         if self.offset is None:
             x, y, _ = pointcloudfile.offset_for(self.file)
-            self.offset = UTM_coords(x, y, zone, south)
+            self.offset = utm_convert.UTM_coords(x, y, zone, south)
 
         self.update_spatial()
         if colours:
@@ -144,8 +143,10 @@ class MapObj(object):
             if len(adjacent) < 6:
                 continue
             height = self.ground[k]
-            OK = 3 > sum(abs(height - n) > 2*args.cellsize for n in adjacent)
-            if not OK:
+            # Number of cells at more than 2:1 slope - suspiciously steep.
+            # 3+ usually indicates a misclassified cell or data artefact.
+            probs = sum(abs(height - n) > 2*args.cellsize for n in adjacent)
+            if probs >= 3:
                 problematic.add(k)
         return problematic
 
@@ -221,7 +222,8 @@ class MapObj(object):
         out['UTM_zone'] = args.utmzone
         name = matchtrees.name_from_location(self.prev_trees, (x, y))
         out['name'] = name if name is not None else 'unknown'
-        out['latitude'], out['longitude'] = UTM_to_LatLon(x, y, args.utmzone)
+        out['latitude'], out['longitude'] = utm_convert.UTM_to_LatLon(
+            x, y, args.utmzone)
         out['area'] = len(keys) * args.cellsize**2
         out['base_altitude'] = statistics.mean(self.ground[k] for k in keys)
         # Loop over grid cells to accumulate other information
@@ -363,8 +365,8 @@ def main_processing():
         attr_map.save_individual_trees()
     print('Done.')
 
-if __name__ == '__main__':
-    # args are globally available
+def main():
+    global args
     args = get_args()
     if not os.path.isfile(args.file):
         raise IOError('Input file not found, ' + args.file)
