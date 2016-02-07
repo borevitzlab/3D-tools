@@ -175,9 +175,6 @@ class IncrementalWriter:
                 points - enough for most objects but still practical to hold
                 thousands in memory.  Set a smaller buffer for large forests.
         """
-        if not os.path.isdir(os.path.dirname(filename)):
-            raise FileNotFoundError('Parent directory of the given filename '
-                                    'must exist.')
         self.filename = filename
         self.temp_storage = SpooledTemporaryFile(max_size=buffer, mode='w+b')
         self.count = 0
@@ -215,6 +212,8 @@ class IncrementalWriter:
             x, y, zone, south = self.utm_coords
             head.insert(-2, 'comment UTM x y zone south {:.2f} {:.2f} {:d} {}'
                         .format(x, y, zone, '1' if south else '0'))
+        if not os.path.isdir(os.path.dirname(self.filename)):
+            os.makedirs(os.path.dirname(self.filename))
         with open(self.filename, 'wb') as f:
             f.write(('\n'.join(head) + '\n').encode('ascii'))
             self.temp_storage.seek(0)

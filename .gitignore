@@ -4,8 +4,9 @@
 *.xyz
 *.las
 
-# Nuitka compilation artefacts
-forest-utils.[bd]*
+# ...but allow some data for demos and testing
+!test_data/test_point_cloud.ply
+!test_data/test_point_cloud_ply_offset.xyz
 
 # Hypothesis testing data
 .hypothesis/

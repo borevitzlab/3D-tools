@@ -8,6 +8,7 @@ install:
 script:
   - pylint src -d fixme
   - nosetests --all-modules
-  - sphinx-build -W . _build/html
+  - sphinx-build -qW . _build/html
+  - sh demo.sh
 notifications:
   email: false
