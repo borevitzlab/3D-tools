@@ -62,7 +62,7 @@ __utm = collections.namedtuple('UTM_coords', ['x', 'y', 'zone', 'south'])
 
 def is_valid_utm(x, y, zone, south):
     return all([
-        0 <= x <= EARTH_CIRC/60,
+        0 <= x <= UTM_MAX_VAL,
         0 <= y <= UTM_MAX_VAL,
         zone in range(1, 61),
         isinstance(south, bool)
@@ -71,7 +71,7 @@ def is_valid_utm(x, y, zone, south):
 def UTM_coords(x, y, zone, south, validate=True):
     """Return a namedtuple of validated values for a UTM coordinate."""
     if validate:
-        assert is_valid_utm(x, y, zone, south)
+        assert is_valid_utm(x, y, zone, south), (x, y, zone, south)
     return __utm(x, y, zone, south)
 
 

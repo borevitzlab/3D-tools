@@ -164,7 +164,7 @@ class MapObj(object):
                 self.ground[key] = min(adjacent) + 2*args.cellsize
             prev = len(problematic)
             problematic = self.__problematic(problematic)
-            if len(problematic) / prev > 0.9:
+            if prev == 0 or len(problematic) / prev > 0.9:
                 break
 
     def _tree_components(self):

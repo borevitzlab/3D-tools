@@ -95,12 +95,9 @@ def process_header(file_handle):
         origin coordinate (None if unknown).
     """
     head = []
-    while True:
-        head.append(next(file_handle).decode())
-        if head[-1].strip() == 'end_header':
-            break
+    while not head or head[-1] != ['end_header']:
+        head.append(next(file_handle).decode().strip().split(' '))
 
-    head = [line.strip().split(' ') for line in head]
     is_big_endian = ['format', 'binary_big_endian', '1.0'] in head
     while not head[-1] == ['end_header']:
         head.pop()
@@ -120,7 +117,7 @@ def process_header(file_handle):
                  'uchar': 'B', 'char': 'b',
                  'ushort': 'H', 'short': 'h',
                  'uint': 'I', 'int': 'i'}
-    form_str += ''.join(ply_types[t] for t in typeorder)
+    form_str += ''.join(ply_types.get(t, '') for t in typeorder)
 
     head = [line[2] for line in head if line[0] == 'property']
     cols = {'r': 'red', 'g': 'green', 'b': 'blue'}
@@ -141,7 +138,8 @@ def _read_ply(fname):
     with open(fname, 'rb') as f:
         point, ind, _ = process_header(f)
         raw = f.read(point.size)
-        if ind == tuple(range(6)):  # Faster in the most common case
+        if ind == tuple(range(6)) and point.size == 6:
+            # This special case is also most common, so we handle it faster
             while raw:
                 yield point.unpack(raw)
                 raw = f.read(point.size)
