@@ -5,7 +5,7 @@ Metadata and setup info for installation.
 See  https://packaging.python.org/en/latest/distributing.html
 """
 
-from setuptools import setup, find_packages
+import setuptools
 
 with open('README.rst') as f:
     long_description = f.read()
@@ -36,17 +36,11 @@ config = dict(
         'Topic :: Scientific/Engineering :: Visualization',
     ],
 
-    # You can just specify the packages manually here if your project is
-    # simple. Or you can use find_packages().
-    packages=find_packages(),
-
+    packages=['src'],
     install_requires=[],
-    # List additional groups of dependencies here (e.g. development
-    # dependencies). You can install these using the following syntax,
-    # for example "pip install -e .[test]" installs from path "." and
-    # includes the 'test' dependency group.
     extras_require={'test': ['hypothesis', 'nose', 'pylint']},
+    entry_points={'console_scripts': ['forestutils=src.forestutils:main']},
 )
 
 if __name__ == '__main__':
-    setup(**config)
+    setuptools.setup(**config)
