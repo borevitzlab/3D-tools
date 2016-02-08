@@ -46,7 +46,7 @@ class MapObj(object):
     cells.  Hides data structure and accessed through coordinates."""
     # pylint:disable=too-many-instance-attributes
 
-    def __init__(self, input_file, colours=True, *,
+    def __init__(self, input_file, *, colours=True,
                  prev_csv=None, zone=55, south=True):
         """
         Args:
