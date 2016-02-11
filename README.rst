@@ -38,7 +38,10 @@ Features:
 It is written in pure Python (3.4+), available under the GPL3 license,
 and can analyse multi-gigabyte datasets in surprisingly little memory.
 
-Useful links:
+.. END_DESCRIPTION_TAG
+
+Useful links
+============
 
 - `documentation <https://3d-tools.readthedocs.org>`_
 - `processed pointclouds <https://pointclouds.phenocam.org.au>`_

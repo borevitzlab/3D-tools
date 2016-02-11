@@ -4,13 +4,15 @@ Using forestutils
 
 Installation
 ============
-*You will need Python_ installed, version 3.4 or later.*
+*You will need* Python_ *installed, version 3.4 or later.*
 
 .. _Python: https://www.python.org
 
 Run ``pip install forestutils``.  That's it!  You can now run ``forestutils``
 from the commandline without any further configuration.
 
+
+.. _usage:
 
 Command-line usage
 ==================
@@ -35,7 +37,7 @@ some flexibility for speed.
 
 .. _Pix4D: https://www.pix4d.com/
 
-- For other pointcloud formats, simple open and resave in MeshLab_.
+- For other pointcloud formats, simply open and resave in MeshLab_.
   This allows forestutils to defer the problem to a more robust program.
   It also confers second-hand 'compatibility' with a wider variety of 3D
   formats!
