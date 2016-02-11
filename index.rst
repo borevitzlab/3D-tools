@@ -11,6 +11,6 @@ Contents
    :maxdepth: 2
    :glob:
 
-   docs/*
+   docs/**
 
 * :ref:`genindex`

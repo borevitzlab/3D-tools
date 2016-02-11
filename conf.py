@@ -3,6 +3,7 @@
 
 import datetime
 import os
+import shutil
 import sys
 
 import shlex
@@ -10,6 +11,21 @@ import shlex
 sys.path.insert(0, os.path.abspath('.'))
 # Use metadata from setup.py for author, version, etc.
 from setup import config
+
+# -- Generate stubs for automodule documentation --------------------------
+
+def generate_stubs():
+    """Generate an autodoc stub for each module in ./src"""
+    template = '{m}\n{u}\n\n.. automodule:: src.{m}\n   :members:\n'
+    shutil.rmtree('docs/src/', ignore_errors=True)
+    os.mkdir('docs/src/')
+    for f in os.listdir('src'):
+        fname, ext = os.path.splitext(f)
+        if ext == '.py' and fname != '__init__':
+            with open('docs/src/' + fname + '.rst', 'w') as f:
+                f.write(template.format(m=fname, u='#'*len(fname)))
+
+generate_stubs()
 
 # -- General configuration ------------------------------------------------
 
