@@ -18,8 +18,10 @@
    :target: https://pypi.python.org/pypi/forestutils
 
 .. |version_badge| image:: https://img.shields.io/pypi/pyversions/forestutils.svg
+   :target: https://pypi.python.org/pypi/forestutils
 
 .. |status_badge| image:: https://img.shields.io/pypi/status/forestutils.svg
+   :target: https://pypi.python.org/pypi/forestutils
 
 .. END_BADGES_TAG
 
