@@ -26,11 +26,11 @@ import argparse
 import csv
 import math
 import os
-import statistics
 
 from . import matchtrees, pointcloudfile, utm_convert
 
 args = None
+
 
 def coords(pos):
     """Return a tuple of integer coordinates as keys for the dict/map.
@@ -225,7 +225,7 @@ class MapObj(object):
         out['latitude'], out['longitude'] = utm_convert.UTM_to_LatLon(
             x, y, args.utmzone)
         out['area'] = len(keys) * args.cellsize**2
-        out['base_altitude'] = statistics.mean(self.ground[k] for k in keys)
+        out['base_altitude'] = sum(self.ground[k] for k in keys) / len(keys)
         # Loop over grid cells to accumulate other information
         for k in keys:
             out['height'] = max(out.get('height', 0),
@@ -365,9 +365,10 @@ def main_processing():
         attr_map.save_individual_trees()
     print('Done.')
 
+
 def main():
     """Interface to call from outside the package."""
-    global args #pylint:disable=global-statement
+    global args  # pylint:disable=global-statement
     args = get_args()
     if not os.path.isfile(args.file):
         raise IOError('Input file not found, ' + args.file)
