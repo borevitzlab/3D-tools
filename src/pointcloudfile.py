@@ -14,15 +14,20 @@ spatial coordinates.  RGB is the color, each an unsigned 8-bit integer.
 While intentionally limited in scope, most data can be converted to this
 format easily enough.
 """
+# pylint:disable=unsubscriptable-object
 
 import struct
 import os.path
 from tempfile import SpooledTemporaryFile
+from typing import Iterator, Tuple
 
 from . import utm_convert
 
+# User-defined types:
+PointStream = Iterator[Tuple[float, ...]]
 
-def offset_for(filename):
+
+def offset_for(filename: str) -> Tuple[float, float, float]:
     """Return the (x, y, z) offset for a Pix4D .ply cloud."""
     offset = filename[:-4] + '_ply_offset.xyz'
     try:
@@ -42,7 +47,7 @@ def _check_input(fname, ending=''):
             fname[-4:], ending))
 
 
-def read(fname):
+def read(fname: str) -> PointStream:
     """Passes the file to a read function for that format."""
     if fname.endswith('_point_cloud_part_1.ply'):
         parts, p = [fname], 1
@@ -94,12 +99,15 @@ def process_header(file_handle):
         values within each element; and the UTM location of the pointcloud
         origin coordinate (None if unknown).
     """
+    # TODO:  detect unhandled file types for robustness
+    # TODO:  generalise for other attributes of pointclouds
+    # TODO:  return number of verticies, to avoid reading other elements
     head = []
-    while not head or head[-1] != ['end_header']:
+    while ['end_header'] not in head:
         head.append(next(file_handle).decode().strip().split(' '))
 
     is_big_endian = ['format', 'binary_big_endian', '1.0'] in head
-    while not head[-1] == ['end_header']:
+    while head[-1] != ['end_header']:
         head.pop()
         if not head:
             raise ValueError('Invalid header for .ply file.')
@@ -130,7 +138,7 @@ def process_header(file_handle):
     return struct.Struct(form_str), ind, offset
 
 
-def _read_ply(fname):
+def _read_ply(fname) -> PointStream:
     """Opens the specified file, and returns a point set in the format required
     by attributes_from_cloud.  Only handles xyzrgb point clouds, but that's
     a fine subset of the format.  See http://paulbourke.net/dataformats/ply/"""
@@ -159,10 +167,10 @@ class IncrementalWriter:
     This allows some nice tricks, including splitting a point cloud into
     multiple files in a single pass, without memory issues.
     """
-    #pylint:disable=too-few-public-methods
+    # pylint:disable=too-few-public-methods
     # TODO:  add methods to allow use as context manager ("with _ as _: ...")
 
-    def __init__(self, filename, utm_coords=None, buffer=2**22):
+    def __init__(self, filename, utm_coords=None, buffer=2**22) -> None:
         """
         Args:
             filename: final place to save the file on disk.  Parent directory
@@ -184,7 +192,7 @@ class IncrementalWriter:
         except AssertionError:
             self.utm_coords = None
 
-    def __call__(self, point):
+    def __call__(self, point) -> None:
         """Add a single point to this pointcloud, saving in binary format.
 
         Args:

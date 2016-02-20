@@ -21,18 +21,22 @@ Example outputs (from an older version):
 `a map <https://www.google.com/maps/d/viewer?mid=z1pH7HaTWL9Q.kzQflQGYVRIU>`_,
 and `pointclouds <http://phenocam.org.au/pointclouds>`_.
 """
+# pylint:disable=unsubscriptable-object
 
 import argparse
 import csv
 import math
 import os
+from typing import Tuple, Set
 
 from . import matchtrees, pointcloudfile, utm_convert
 
-args = None
+
+# User-defined types
+XY_Coord = Tuple[float, float]  # float is duck-type compatible with int too
 
 
-def coords(pos):
+def coords(pos: tuple) -> XY_Coord:
     """Return a tuple of integer coordinates as keys for the dict/map.
     * pos can be a full point tuple, or just (x, y)
     * use floor() to avoid imprecise float issues"""
@@ -41,7 +45,7 @@ def coords(pos):
     return x, y
 
 
-class MapObj(object):
+class MapObj:
     """Stores a maximum and minimum height map of the cloud, in GRID_SIZE
     cells.  Hides data structure and accessed through coordinates."""
     # pylint:disable=too-many-instance-attributes
@@ -110,17 +114,17 @@ class MapObj(object):
             R, G, B = self.colours.get(idx, (0, 0, 0))
             self.colours[idx] = (R+r, G+g, B+b)
 
-    def is_ground(self, point):
+    def is_ground(self, point) -> bool:
         """Returns boolean whether the point is not classified as ground - ie
         True if within GROUND_DEPTH of the lowest point in the cell.
         If not lossy, also true for lowest ground point in a cell."""
         return point[2] - self.ground[coords(point)] < args.grounddepth
 
-    def is_lowest(self, point):
+    def is_lowest(self, point) -> bool:
         """Returns boolean whether the point is lowest in that grid cell."""
         return point[2] == self.ground[coords(point)]
 
-    def __len__(self):
+    def __len__(self) -> int:
         """Total observed points."""
         return sum(self.density.values())
 
@@ -132,7 +136,7 @@ class MapObj(object):
                  (0, 1), (0, -1),
                  (-1, 1), (-1, 0), (-1, -1)])
 
-    def __problematic(self, prior=None):
+    def __problematic(self, prior: set=None) -> Set[XY_Coord]:
         """Identifies cells with more than 2:1 slope to 3+ adjacent cells."""
         problematic = set()
         if prior is None:
@@ -290,7 +294,7 @@ class MapObj(object):
             writer.save_to_disk()
 
 
-def stream_analysis(attr, out):
+def stream_analysis(attr, out: str) -> None:
     """Saves the list of trees with attributes to the file 'out'."""
     header = ('name', 'latitude', 'longitude', 'UTM_X', 'UTM_Y', 'UTM_zone',
               'height', 'area', 'base_altitude',
@@ -366,10 +370,15 @@ def main_processing():
     print('Done.')
 
 
-def main():
+def main(args=None):
     """Interface to call from outside the package."""
-    global args  # pylint:disable=global-statement
-    args = get_args()
+    # pylint:disable=redefined-outer-name
+    if args is None:
+        args = get_args()
     if not os.path.isfile(args.file):
         raise IOError('Input file not found, ' + args.file)
     main_processing()
+
+if __name__ == '__main__':
+    args = get_args()
+    main(args)

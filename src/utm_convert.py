@@ -24,9 +24,11 @@ are designed to highlight such problems, but in normal use it's fine.
 # pylint:disable=missing-docstring,redefined-outer-name
 
 import argparse
-import collections
 import math
+from typing import NamedTuple, Tuple
 
+# User-defined types
+Coord = Tuple[float, float]
 
 # 10000000 and 1000000 meters look too similar, so let's name big constants.
 EARTH_CIRC = 40.075 * 10**6
@@ -38,10 +40,11 @@ sm_b = 6356752.314
 UTMScaleFactor = 0.9996
 
 # Defining this every time we instantiate one is too slow
-__utm = collections.namedtuple('UTM_coords', ['x', 'y', 'zone', 'south'])
+UTM_Coord = NamedTuple(
+    'UTM_Coord', [('x', float), ('y', float), ('zone', int), ('south', bool)])
 
 
-def is_valid_utm(x, y, zone, south):
+def is_valid_utm(x: float, y: float, zone: int, south: bool) -> bool:
     return all([
         0 <= x <= UTM_MAX_VAL,
         0 <= y <= UTM_MAX_VAL,
@@ -50,23 +53,24 @@ def is_valid_utm(x, y, zone, south):
         ])
 
 
-def UTM_coords(x, y, zone, south, validate=True):
+def UTM_coords(x: float, y: float, zone: int, south: bool,
+               validate=True) -> UTM_Coord:
     """Return a namedtuple of validated values for a UTM coordinate."""
     if validate:
         assert is_valid_utm(x, y, zone, south), (x, y, zone, south)
-    return __utm(x, y, zone, south)
+    return UTM_Coord(x, y, zone, south)
 
 
-def dif(a, b):
+def dif(a: float, b: float) -> float:
     return abs(abs(a) - abs(b))
 
 
-def wrap(L, i):
+def wrap(L: float, i: float) -> float:
     """Wrap overflowing coordinates around the sphere."""
     return ((L + math.pi/i) % 2*math.pi/i) - math.pi/i
 
 
-def zone_from_lon(lon):
+def zone_from_lon(lon: float) -> int:
     zone = int((math.degrees(lon)+183) / 6)
     if zone < 1:
         zone += 60
@@ -75,12 +79,12 @@ def zone_from_lon(lon):
     return zone
 
 
-def cmerid_of_zone(zone):
+def cmerid_of_zone(zone: int) -> float:
     """Return the central meridian of the given zone, in radians."""
     return math.radians(zone*6 - 183)
 
 
-def ArcLengthOfMeridian(phi):
+def ArcLengthOfMeridian(phi: float) -> float:
     """Compute the ellipsoidal distance from the equator to a given latitude.
 
     Args:
@@ -102,7 +106,7 @@ def ArcLengthOfMeridian(phi):
                 epsilon * math.sin(8 * phi)]) * alpha
 
 
-def FootpointLatitude(y):
+def FootpointLatitude(y: float) -> float:
     '''Computes the footpoint latitude for use in converting transverse
     Mercator coordinates to ellipsoidal coordinates.
 
@@ -125,7 +129,7 @@ def FootpointLatitude(y):
                 epsilon_ * math.sin(8 * y)])
 
 
-def MapLatLonToXY(phi, lambda_, meridian=None):
+def MapLatLonToXY(phi: float, lambda_: float, meridian: float=None) -> Coord:
     """Convert polar coordinates to the Transverse Mercator projection.
 
     This is the scary elipsoidal geometry for coordinate projection -
@@ -179,7 +183,7 @@ def MapLatLonToXY(phi, lambda_, meridian=None):
     return x, y + ArcLengthOfMeridian(phi)
 
 
-def LatLonToUTMXY(lat, lon):
+def LatLonToUTMXY(lat: float, lon: float) -> UTM_Coord:
     '''Converts a latitude/longitude pair to x and y coordinates in the
     Universal Transverse Mercator projection.
 
@@ -202,7 +206,7 @@ def LatLonToUTMXY(lat, lon):
     return UTM_coords(x, y, zone_from_lon(lon), south, False)
 
 
-def MapXYToLatLon(x, y, lambda_0):
+def MapXYToLatLon(x: float, y: float, lambda_0: float) -> Coord:
     '''Converts x and y coordinates in the Transverse Mercator projection to
     a latitude/longitude pair.  Note that Transverse Mercator is not
     the same as UTM a scale factor is required to convert between them.
@@ -248,7 +252,7 @@ def MapXYToLatLon(x, y, lambda_0):
             lambda_0 + sum(frac[n] * poly[n] * x**n for n in [1, 3, 5, 7]))
 
 
-def UTMXYToLatLon(x, y, zone, south):
+def UTMXYToLatLon(x: float, y: float, zone, south) -> Coord:
     '''Converts x and y coordinates in the Universal Transverse Mercator
     projection to a latitude/longitude pair.
 
@@ -272,13 +276,13 @@ def UTMXYToLatLon(x, y, zone, south):
     return MapXYToLatLon(x, y, c_merid)
 
 
-def UTM_to_LatLon(x, y, zone=55, south=True):
+def UTM_to_LatLon(x: float, y: float, zone=55, south=True) -> Coord:
     """Take xy values in UTM (default zone S55), and return lat and lon."""
     lat, lon = UTMXYToLatLon(x, y, zone, south)
     return math.degrees(wrap(lat, 2)), math.degrees(wrap(lon, 1))
 
 
-def LatLon_to_UTM(lat, lon):
+def LatLon_to_UTM(lat: float, lon: float) -> UTM_Coord:
     """Take lat and lon in decimal degrees, and return UTM x, y, and zone."""
     return LatLonToUTMXY(math.radians(lat), math.radians(lon))
 
@@ -307,6 +311,6 @@ if __name__ == '__main__':
         lat, lon = UTM_to_LatLon(args.n1, args.n2, args.UTMZone)
         print('Lat:  {}\nLon:  {}'.format(lat, lon))
     else:
-        latlon, zone, south = LatLon_to_UTM(args.n1, args.n2)
+        lat, lon, zone, south = LatLon_to_UTM(args.n1, args.n2)
         print('UTM X:     {}\nUTM Y:     {}\nUTM Zone:  {}{}'.format(
-            latlon[0], latlon[1], zone, 'S' if south else ''))
+            lat, lat, zone, 'S' if south else 'N'))
