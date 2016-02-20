@@ -12,7 +12,7 @@ with open('README.rst') as f:
 
 config = dict(
     name='forestutils',
-    version='0.1.1',
+    version='0.1.2',
     description='Tools to analyse 3D scans of a forest.',
     long_description=long_description,
 
