@@ -38,7 +38,9 @@ config = dict(
 
     packages=['src'],
     install_requires=[],
-    extras_require={'test': ['hypothesis', 'nose', 'pylint']},
+    extras_require={
+        'test': ['hypothesis', 'mypy-lang', 'nose', 'pylint', 'sphinx'],
+        },
     entry_points={'console_scripts': ['forestutils=src.forestutils:main']},
 )
 

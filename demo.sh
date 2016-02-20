@@ -11,11 +11,11 @@
 
 echo "Running with Meshlab-style header and .xyz offset file"
 echo
-python3 main.py test_data/test_point_cloud.ply --savetrees test_data/trees
+python main.py test_data/test_point_cloud.ply --savetrees test_data/trees
 echo
 # Move/rename output to disable recognition and reading of preprocessed file
 mv test_point_cloud_sparse.ply test_data/second_point_cloud.ply
 echo
 echo "Running with first output (Pix4D-style header plus location comment)"
 echo
-python3 main.py test_data/second_point_cloud.ply
+forestutils test_data/second_point_cloud.ply

@@ -370,15 +370,17 @@ def main_processing():
     print('Done.')
 
 
-def main(args=None):
+def main():
     """Interface to call from outside the package."""
-    # pylint:disable=redefined-outer-name
-    if args is None:
-        args = get_args()
+    # pylint:disable=global-statement
+    global args
+    args = get_args()
     if not os.path.isfile(args.file):
         raise IOError('Input file not found, ' + args.file)
     main_processing()
 
 if __name__ == '__main__':
+    # Call to get_args is duplicated to work in static analysis, from
+    # command line, and when installed as package (calls main directly)
     args = get_args()
-    main(args)
+    main()

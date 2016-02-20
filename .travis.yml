@@ -2,14 +2,10 @@ language: python
 python:
   - "3.4"
   - "3.5"
-install:
-  - pip install hypothesis
-  - pip install pylint
-  - pip install sphinx
-  - pip install mypy-lang
+install: pip install .[test]
 script:
   - pylint src -d fixme
-  - nosetests -v --all-modules test
+  - nosetests
   - mypy src
   - sphinx-build -qW . _build/html
   - sh demo.sh
