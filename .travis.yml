@@ -6,9 +6,11 @@ install:
   - pip install hypothesis
   - pip install pylint
   - pip install sphinx
+  - pip install mypy-lang
 script:
   - pylint src -d fixme
   - nosetests -v --all-modules test
+  - mypy src
   - sphinx-build -qW . _build/html
   - sh demo.sh
 notifications:
