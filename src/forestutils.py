@@ -22,6 +22,7 @@ Example outputs (from an older version):
 and `pointclouds <http://phenocam.org.au/pointclouds>`_.
 """
 # pylint:disable=unsubscriptable-object
+# TODO:  UTRGENT - only index point attributess by name, not position
 
 import argparse
 import csv
@@ -29,7 +30,7 @@ import math
 import os
 from typing import Tuple, Set
 
-from . import matchtrees, pointcloudfile, utm_convert
+from . import pointcloudfile, utm_convert
 
 
 # User-defined types
@@ -50,8 +51,7 @@ class MapObj:
     cells.  Hides data structure and accessed through coordinates."""
     # pylint:disable=too-many-instance-attributes
 
-    def __init__(self, input_file, *, colours=True,
-                 prev_csv=None, zone=55, south=True):
+    def __init__(self, input_file, *, colours=True, zone=55, south=True):
         """
         Args:
             input_file (path): the ``.ply`` file to process.  If dealing with
@@ -70,17 +70,8 @@ class MapObj:
         self.colours = dict()
         self.trees = dict()
 
-        self.prev_trees = []
-        if prev_csv is not None:
-            if os.path.isfile(prev_csv):
-                self.prev_trees = list(
-                    matchtrees.name_loc_list_from_csv(prev_csv))
-
-        with open(self.file, 'rb') as fh:
-            self.offset = pointcloudfile.process_header(fh)[-1]
-        if self.offset is None:
-            x, y, _ = pointcloudfile.offset_for(self.file)
-            self.offset = utm_convert.UTM_coords(x, y, zone, south)
+        x, y, _ = pointcloudfile.offset_for(self.file)
+        self.offset = utm_convert.UTM_coords(x, y, zone, south)
 
         self.update_spatial()
         if colours:
@@ -224,7 +215,7 @@ class MapObj:
         out['UTM_Y'] = y = self.offset.y + args.cellsize * (
             max(k[1] for k in keys) + min(k[1] for k in keys)) / 2
         out['UTM_zone'] = args.utmzone
-        name = matchtrees.name_from_location(self.prev_trees, (x, y))
+        name = 'unknown'  # get from matchtrees when implemented
         out['name'] = name if name is not None else 'unknown'
         out['latitude'], out['longitude'] = utm_convert.UTM_to_LatLon(
             x, y, args.utmzone)
@@ -285,13 +276,9 @@ class MapObj:
             self.offset) for tree_ID in set(self.trees.values())}
         # For non-ground, find the appropriate writer and call with the point
         for point in pointcloudfile.read(self.file):
-            if not self.is_ground(point):
-                continue
             val = self.trees.get(coords(point))
             if val is not None:
                 tree_to_file[val](point)
-        for writer in set(tree_to_file.values()):
-            writer.save_to_disk()
 
 
 def stream_analysis(attr, out: str) -> None:
@@ -335,10 +322,6 @@ def get_args():
     parser.add_argument(  # feature classification
         '--grounddepth', default=0.2, type=float,
         help='depth to omit from sparse point cloud')
-    parser.add_argument(  # match names from previous data
-        '--prevcsv', default=None, type=str,
-        help='a csv file with tree names in the first column, and either ' +
-        'columns for latitude and longitude, or UTM_X and UTM_Y')
     return parser.parse_args()
 
 
@@ -351,11 +334,11 @@ def main_processing():
             args.out, os.path.basename(args.file)[:-4] + '_sparse.ply')
     sparse = sparse.replace('_part_1', '')
     if os.path.isfile(sparse):
-        attr_map = MapObj(sparse, prev_csv=args.prevcsv)
+        attr_map = MapObj(sparse)
         print('Read {} points into {} cells'.format(
             len(attr_map), len(attr_map.canopy)))
     else:
-        attr_map = MapObj(args.file, colours=False, prev_csv=args.prevcsv)
+        attr_map = MapObj(args.file, colours=False)
         print('Read {} points into {} cells, writing "{}" ...'.format(
             len(attr_map), len(attr_map.canopy), sparse))
         attr_map.save_sparse_cloud(sparse)

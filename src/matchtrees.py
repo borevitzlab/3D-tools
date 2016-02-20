@@ -14,8 +14,6 @@ and matching the whole datasets at once.  More flexible input, but much more
 complex code.
 """
 
-# TODO:  enforce same UTM zone for all inputs in some elegant way.
-
 import argparse
 import csv
 
@@ -80,7 +78,6 @@ def paste_names_across_analyses(old_file, new_file, tolerance=1):
     NOT YET IMPLEMENTED
     """
     #pylint:disable=unused-argument
-    # TODO:  Implement this function when test data is available
     raise NotImplementedError
 
 
