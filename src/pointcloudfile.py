@@ -179,7 +179,8 @@ class IncrementalWriter:
     """
     # pylint:disable=too-few-public-methods
 
-    def __init__(self, filename: str, source_fname: str, buffer=2**22) -> None:
+    def __init__(self, filename: str, header: PlyHeader,
+                 utm: utm_convert.UTM_Coord=None, buffer=2**22) -> None:
         """
         Args:
             filename: final place to save the file on disk.
@@ -191,15 +192,12 @@ class IncrementalWriter:
                 thousands in memory.  Set a smaller buffer for large forests.
         """
         self.filename = filename
-        self.source_fname = source_fname
         self.temp_storage = SpooledTemporaryFile(max_size=buffer, mode='w+b')
         self.count = 0
-        header = parse_ply_header(ply_header_text(source_fname))
+        self.utm = utm
+        self.header = header
         # Always write in big-endian mode; only store type information
         self.binary = struct.Struct('>' + header.form_str[1:])
-        # TODO:  fix cordinate detection
-        x, y, _ = offset_for(source_fname)
-        self.utm_coords = utm_convert.UTM_coords(x, y, 55, True)
 
     def __call__(self, point) -> None:
         """Add a single point to this pointcloud, saving in binary format.
@@ -212,19 +210,18 @@ class IncrementalWriter:
 
     def __del__(self):
         """Flush data to disk and clean up."""
-        header = parse_ply_header(ply_header_text(self.source_fname))
         to_ply_types = {v: k for k, v in PLY_TYPES.items()}
         properties = ['property {t} {n}'.format(t=t, n=n) for t, n in zip(
-            (to_ply_types[p] for p in header.form_str[1:]), header.names)]
+            (to_ply_types[p] for p in self.header.form_str[1:]),
+            self.header.names)]
         head = ['ply',
                 'format binary_big_endian 1.0',
                 'element vertex {}'.format(self.count),
                 '\n'.join(properties),
                 'end_header']
-        if self.utm_coords is not None:
-            x, y, zone, south = self.utm_coords
-            head.insert(-1, 'comment UTM x y zone south {:.2f} {:.2f} {:d} {}'
-                        .format(x, y, zone, '1' if south else '0'))
+        if self.utm is not None:
+            head.insert(-1, 'comment UTM x y zone south ' +
+                        '{0.x} {0.y} {0.zone} {0.south}'.format(self.utm))
         if not os.path.isdir(os.path.dirname(self.filename)):
             os.makedirs(os.path.dirname(self.filename))
         with open(self.filename, 'wb') as f:
@@ -237,8 +234,9 @@ class IncrementalWriter:
         self.temp_storage.close()
 
 
-def write(cloud: Iterator, fname: str, source_fname: str) -> None:
+def write(cloud: Iterator, fname: str, header: PlyHeader,
+          utm: utm_convert.UTM_Coord) -> None:
     """Write the given cloud to disk."""
-    writer = IncrementalWriter(fname, source_fname)
+    writer = IncrementalWriter(fname, header, utm)
     for p in cloud:
         writer(p)

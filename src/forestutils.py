@@ -33,7 +33,7 @@ from . import pointcloudfile, utm_convert
 
 
 # User-defined types
-XY_Coord = NamedTuple('XY_Coord', [('x', float), ('y', float)])
+XY_Coord = NamedTuple('XY_Coord', [('x', int), ('y', int)])
 Coord_Labels = MutableMapping[XY_Coord, int]
 
 
@@ -112,8 +112,9 @@ def smooth_ground(ground_dict: Coord_Labels) -> None:
 class MapObj:
     """Stores a maximum and minimum height map of the cloud, in GRID_SIZE
     cells.  Hides data structure and accessed through coordinates."""
+    # pylint:disable=too-many-instance-attributes
 
-    def __init__(self, input_file, *, colours=True, zone=55, south=True):
+    def __init__(self, input_file, *, colours=True):
         """
         Args:
             input_file (path): the ``.ply`` file to process.  If dealing with
@@ -125,7 +126,6 @@ class MapObj:
             zone (int): the UTM zone of the site.
             south (bool): if the site is in the southern hemisphere.
         """
-        self.input_file = input_file
         self.file = input_file
         self.canopy = dict()
         self.density = dict()
@@ -133,8 +133,10 @@ class MapObj:
         self.colours = dict()
         self.trees = dict()
 
-        x, y, _ = pointcloudfile.offset_for(self.file)
-        self.offset = utm_convert.UTM_coords(x, y, zone, south)
+        self.header = pointcloudfile.parse_ply_header(
+            pointcloudfile.ply_header_text(input_file))
+        x, y, _ = pointcloudfile.offset_for(input_file)
+        self.utm = utm_convert.UTM_Coord(x, y, args.utmzone, not args.north)
 
         self.update_spatial()
         if colours:
@@ -194,8 +196,8 @@ class MapObj:
         key_scale_record = {}  # type: Dict[XY_Coord, Set[XY_Coord]]
         for key in self.density.keys():
             if self.canopy[key] - self.ground[key] > args.slicedepth:
-                cc_key = XY_Coord(math.floor(key.x / args.joinedcells),
-                                  math.floor(key.y / args.joinedcells))
+                cc_key = XY_Coord(int(math.floor(key.x / args.joinedcells)),
+                                  int(math.floor(key.y / args.joinedcells)))
                 if cc_key not in key_scale_record:
                     key_scale_record[cc_key] = {key}
                 else:
@@ -207,31 +209,29 @@ class MapObj:
         # Copy labels to grid of original scale
         return {s: trees[k] for k, v in key_scale_record.items() for s in v}
 
-    def tree_data(self, keys):
+    def tree_data(self, keys: Set[XY_Coord]) -> dict:
         """Return a dictionary of data about the tree in the given keys."""
-        out = dict()
         # Calculate positional information
-        out['UTM_X'] = x = self.offset.y + args.cellsize * (
-            max(k[0] for k in keys) + min(k[0] for k in keys)) / 2
-        out['UTM_Y'] = y = self.offset.y + args.cellsize * (
-            max(k[1] for k in keys) + min(k[1] for k in keys)) / 2
-        out['UTM_zone'] = args.utmzone
-        out['latitude'], out['longitude'] = utm_convert.UTM_to_LatLon(
-            x, y, args.utmzone)
-        out['area'] = len(keys) * args.cellsize**2
-        out['base_altitude'] = sum(self.ground[k] for k in keys) / len(keys)
-        # Loop over grid cells to accumulate other information
+        x = self.utm.x + args.cellsize * sum(k.x for k in keys) / len(keys)
+        y = self.utm.y + args.cellsize * sum(k.y for k in keys) / len(keys)
+        lat, lon = utm_convert.UTM_to_LatLon(x, y, args.utmzone)
+        out = {
+            'latitude': lat,
+            'longitude': lon,
+            'UTM_X': x,
+            'UTM_Y': y,
+            'UTM_zone': args.utmzone,
+            'height': 0,
+            'area': len(keys) * args.cellsize**2,
+            'base_altitude': sum(self.ground[k] for k in keys) / len(keys),
+            'point_count': 0,
+            }
         for k in keys:
-            out['height'] = max(out.get('height', 0),
-                                self.canopy[k] - self.ground[k])
-            out['point_count'] = out.get('point_count', 0) + self.density[k]
-        # TODO:  handle more flexible colour channels
-        # Finally, normalise colour values and round position to confidence
-        for k in ['height', 'area', 'base_altitude']:
-            out[k] = round(out[k], 2)
-        for k in ['UTM_X', 'UTM_Y']:
-            out[k] = round(out[k], 1)
-        return out
+            out['height'] = max(out['height'], self.canopy[k] - self.ground[k])
+            out['point_count'] += self.density[k]
+            for colour, total in self.colours[k].items():
+                out[colour] = total / self.density[k]
+        return {k: round(v, 3) for k, v in out.items()}
 
     def all_trees(self):
         """Yield the characteristics of each tree."""
@@ -253,7 +253,7 @@ class MapObj:
         newpoints = (point for point in pointcloudfile.read(self.file)
                      if canopy and not self.is_ground(point) or
                      lowest and self.is_lowest(point))
-        pointcloudfile.write(newpoints, new_fname, self.input_file)
+        pointcloudfile.write(newpoints, new_fname, self.header, self.utm)
         if lowest and canopy:
             self.file = new_fname
 
@@ -268,23 +268,23 @@ class MapObj:
         # Maps tree ID numbers to a incremental writer for that tree
         tree_to_file = {tree_ID: pointcloudfile.IncrementalWriter(
             os.path.join(args.savetrees, 'tree_{}.ply'.format(tree_ID)),
-            self.input_file) for tree_ID in set(self.trees.values())}
+            self.header, self.utm) for tree_ID in set(self.trees.values())}
         # For non-ground, find the appropriate writer and call with the point
         for point in pointcloudfile.read(self.file):
             val = self.trees.get(coords(point))
             if val is not None:
                 tree_to_file[val](point)
 
-
-def stream_analysis(attr, out: str) -> None:
-    """Saves the list of trees with attributes to the file 'out'."""
-    header = ('latitude', 'longitude', 'UTM_X', 'UTM_Y', 'UTM_zone',
-              'height', 'area', 'base_altitude', 'point_count')
-    with open(out, 'w', newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=header)
-        writer.writeheader()
-        for data in attr.all_trees():
-            writer.writerow(data)
+    def stream_analysis(self, out: str) -> None:
+        """Saves the list of trees with attributes to the file 'out'."""
+        header = ('latitude', 'longitude', 'UTM_X', 'UTM_Y', 'UTM_zone',
+                  'height', 'area', 'base_altitude', 'point_count') + tuple(
+                      a for a in self.header.names if a not in 'xyz')
+        with open(out, 'w', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=header)
+            writer.writeheader()
+            for data in self.all_trees():
+                writer.writerow(data)
 
 
 def get_args():
@@ -306,6 +306,9 @@ def get_args():
     parser.add_argument(  # georeferenced location
         '--utmzone', default=55, type=int,
         help='the UTM coordinate zone for georeferencing')
+    parser.add_argument(  # georeferenced location
+        '--north', action='store_true',
+        help='set if in the northern hemisphere')
     parser.add_argument(  # feature extraction
         '--joinedcells', default=3, type=float,
         help='use cells X times larger to detect gaps between trees')
@@ -339,7 +342,7 @@ def main_processing():
         attr_map.update_colours()
     print('File IO complete, starting analysis...')
     table = '{}_analysis.csv'.format(sparse[:-4].replace('_sparse', ''))
-    stream_analysis(attr_map, table)
+    attr_map.stream_analysis(table)
     if args.savetrees:
         print('Saving individual trees...')
         attr_map.save_individual_trees()
