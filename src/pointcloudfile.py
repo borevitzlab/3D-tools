@@ -22,12 +22,19 @@ import itertools
 import struct
 import os.path
 from tempfile import SpooledTemporaryFile
-from typing import Any, Iterator, List, Tuple
+from typing import Iterator, List, NamedTuple, Tuple
 
 from . import utm_convert
 
 # User-defined types:
-Complicated = Tuple[int, Any, struct.Struct, List[str]]
+Point = Tuple[float, ...]
+PlyHeader = NamedTuple('PlyHeader', [
+    ('vertex_count', int), ('names', Tuple[str, ...]),
+    ('form_str', str), ('comments', Tuple[str, ...])])
+
+# The various struct types of .ply binary format
+PLY_TYPES = {'float': 'f', 'double': 'd', 'uchar': 'B', 'char': 'b',
+             'ushort': 'H', 'short': 'h', 'uint': 'I', 'int': 'i'}
 
 
 def offset_for(filename: str) -> Tuple[float, float, float]:
@@ -105,7 +112,7 @@ def ply_header_text(filename: str) -> bytes:
     return header
 
 
-def parse_ply_header(header_text: bytes) -> Complicated:
+def parse_ply_header(header_text: bytes) -> PlyHeader:
     """Parse the bytes of a .ply header to useful data about the vertices.
 
     Deliberately discards the non-vertex data - this is a pointcloud module!
@@ -122,7 +129,7 @@ def parse_ply_header(header_text: bytes) -> Complicated:
         raise ValueError('ASCII format .ply files not supported at this time.')
 
     # Extract comments from lines
-    comments = [c for c in lines if c.startswith('comment ')]
+    comments = tuple(c for c in lines if c.startswith('comment '))
     lines = [l for l in lines if not l.startswith('comment ')]
 
     # Get vertex count
@@ -131,36 +138,34 @@ def parse_ply_header(header_text: bytes) -> Complicated:
         raise ValueError('File must begin with vertex data!')
 
     # Get list of (type, name) pairs from the list of vertex properties
-    lines = [l.split(' ') for l in lines]  # type: ignore
-    properties = [(t, n) for _, t, n in
-                  itertools.takewhile(lambda l: l[0] == 'property', lines)]
+    properties = [(t, n) for _, t, n in itertools.takewhile(
+        lambda l: l[0] == 'property', (l.split(' ') for l in lines))]
 
     # Get Struct format from list of property types
-    PLY_TYPES = {'float': 'f', 'double': 'd', 'uchar': 'B', 'char': 'b',
-                 'ushort': 'H', 'short': 'h', 'uint': 'I', 'int': 'i'}
     form_str = '>' if 'binary_big_endian' in data_format else '<'
     form_str += ''.join(PLY_TYPES[t] for t, n in properties)
 
     # Get Namedtuple instance from property names
-    names = [n for t, n in properties]
+    names = tuple(n for t, n in properties)
     if not all(p in names for p in ('x', 'y', 'z')):
         raise ValueError('Pointcloud verticies must have x, y, z attributes!')
-    point_tuple = namedtuple('Point', names)  # type: ignore
 
     # Finally, return our values
-    return int(vertex_count), point_tuple, struct.Struct(form_str), comments
+    return PlyHeader(int(vertex_count), names, form_str, comments)
 
 
 def _read_ply(fname: str) -> Iterator:
     """Opens the specified file, and returns a point set in the format required
     by attributes_from_cloud.  Only handles xyzrgb point clouds, but that's
     a fine subset of the format.  See http://paulbourke.net/dataformats/ply/"""
-    header = ply_header_text(fname)
-    vertex_count, Point, fmt, _ = parse_ply_header(header)
+    header_bytes = ply_header_text(fname)
+    header = parse_ply_header(header_bytes)
+    point = namedtuple('Point', header.names)  # type: ignore
+    fmt = struct.Struct(header.form_str)
     with open(fname, 'rb') as f:
-        f.seek(len(header))
-        for _ in range(vertex_count):  # type: ignore
-            yield Point(*fmt.unpack(f.read(fmt.size)))
+        f.seek(len(header_bytes))
+        for _ in range(header.vertex_count):
+            yield point._make(fmt.unpack(f.read(fmt.size)))  # type: ignore
 
 
 class IncrementalWriter:
@@ -173,57 +178,53 @@ class IncrementalWriter:
     multiple files in a single pass, without memory issues.
     """
     # pylint:disable=too-few-public-methods
-    # TODO:  add methods to allow use as context manager ("with _ as _: ...")
 
-    def __init__(self, filename, utm_coords=None, buffer=2**22) -> None:
+    def __init__(self, filename: str, source_fname: str, buffer=2**22) -> None:
         """
         Args:
-            filename: final place to save the file on disk.  Parent directory
-                must exist.  This file will not be created until the
-                :py:meth:`save_to_disk` method is called.
-            utm_coords: The (x, y, z, zone) offset added to find the
-                UTM coordinates of each point.
+            filename: final place to save the file on disk.
+            source_fname: source file for the pointcloud; used to detect
+                file format for metadata etc.
             buffer (int): The number of bytes to hold in RAM before flushing
                 the temporary file to disk.  Default 1MB, which holds ~8300
                 points - enough for most objects but still practical to hold
                 thousands in memory.  Set a smaller buffer for large forests.
         """
         self.filename = filename
+        self.source_fname = source_fname
         self.temp_storage = SpooledTemporaryFile(max_size=buffer, mode='w+b')
         self.count = 0
-        self.binary = struct.Struct('<fffBBB')
-        try:
-            self.utm_coords = utm_convert.UTM_coords(*utm_coords)
-        except AssertionError:
-            self.utm_coords = None
+        header = parse_ply_header(ply_header_text(source_fname))
+        # Always write in big-endian mode; only store type information
+        self.binary = struct.Struct('>' + header.form_str[1:])
+        # TODO:  fix cordinate detection
+        x, y, _ = offset_for(source_fname)
+        self.utm_coords = utm_convert.UTM_coords(x, y, 55, True)
 
     def __call__(self, point) -> None:
         """Add a single point to this pointcloud, saving in binary format.
 
         Args:
-            point: a six-element tuple of (x, y, x, red, green, blue) values,
-                in that order.  (x, y, z) values are coerced to 32-bit floats.
-                (red, green, blue) values are coerced to 8-bit unsigned ints.
+            point (namedtuple): vertex attributes for the point, eg xyzrgba.
         """
-        # TODO:  URGENT - make writer method flexible enough to match reader
-        self.temp_storage.write(self.binary.pack(*point[:6]))
+        self.temp_storage.write(self.binary.pack(*point))
         self.count += 1
 
     def __del__(self):
         """Flush data to disk and clean up."""
+        _, names, form_str, _ = parse_ply_header(
+            ply_header_text(self.source_fname))
+        to_ply_types = {v: k for k, v in PLY_TYPES.items()}
+        properties = ['property {t} {n}'.format(t=t, n=n) for t, n in zip(
+            (to_ply_types[p] for p in form_str[1:]), names)]
         head = ['ply',
-                'format binary_little_endian 1.0',
+                'format binary_big_endian 1.0',
                 'element vertex {}'.format(self.count),
-                'property float x',
-                'property float y',
-                'property float z',
-                'property uchar red',
-                'property uchar green',
-                'property uchar blue',
+                '\n'.join(properties),
                 'end_header']
         if self.utm_coords is not None:
             x, y, zone, south = self.utm_coords
-            head.insert(-2, 'comment UTM x y zone south {:.2f} {:.2f} {:d} {}'
+            head.insert(-1, 'comment UTM x y zone south {:.2f} {:.2f} {:d} {}'
                         .format(x, y, zone, '1' if south else '0'))
         if not os.path.isdir(os.path.dirname(self.filename)):
             os.makedirs(os.path.dirname(self.filename))
@@ -237,8 +238,8 @@ class IncrementalWriter:
         self.temp_storage.close()
 
 
-def write(cloud, fname, utm_coords=None):
+def write(cloud: Iterator, fname: str, source_fname: str) -> None:
     """Write the given cloud to disk."""
-    writer = IncrementalWriter(fname, utm_coords)
+    writer = IncrementalWriter(fname, source_fname)
     for p in cloud:
         writer(p)

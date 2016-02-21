@@ -22,7 +22,7 @@ Example outputs (from an older version):
 and `pointclouds <http://phenocam.org.au/pointclouds>`_.
 """
 # pylint:disable=unsubscriptable-object
-# TODO:  UTRGENT - only index point attributess by name, not position
+# TODO:  index point attributess by name only, not position
 
 import argparse
 import csv
@@ -37,12 +37,12 @@ from . import pointcloudfile, utm_convert
 XY_Coord = Tuple[float, float]  # float is duck-type compatible with int too
 
 
-def coords(pos: tuple) -> XY_Coord:
+def coords(pos):
     """Return a tuple of integer coordinates as keys for the dict/map.
     * pos can be a full point tuple, or just (x, y)
     * use floor() to avoid imprecise float issues"""
-    x = math.floor(pos[0] / args.cellsize)
-    y = math.floor(pos[1] / args.cellsize)
+    x = math.floor(pos.x / args.cellsize)
+    y = math.floor(pos.y / args.cellsize)
     return x, y
 
 
@@ -63,6 +63,7 @@ class MapObj:
             zone (int): the UTM zone of the site.
             south (bool): if the site is in the southern hemisphere.
         """
+        self.input_file = input_file
         self.file = input_file
         self.canopy = dict()
         self.density = dict()
@@ -80,30 +81,35 @@ class MapObj:
     def update_spatial(self):
         """Expand, correct, or maintain map with a new observed point."""
         # Fill out the spatial info in the file
-        for point in pointcloudfile.read(self.file):
-            z = point[2]
-            idx = coords(point)
+        for p in pointcloudfile.read(self.file):
+            idx = coords(p)
             if self.density.get(idx) is None:
                 self.density[idx] = 1
-                self.canopy[idx] = z
-                self.ground[idx] = z
+                self.canopy[idx] = p.z
+                self.ground[idx] = p.z
                 continue
             self.density[idx] += 1
-            if self.ground[idx] > z:
-                self.ground[idx] = z
-            elif self.canopy[idx] < z:
-                self.canopy[idx] = z
+            if self.ground[idx] > p.z:
+                self.ground[idx] = p.z
+            elif self.canopy[idx] < p.z:
+                self.canopy[idx] = p.z
         self.__smooth_ground()
         self.trees = self._tree_components()
 
     def update_colours(self):
         """Expand, correct, or maintain map with a new observed point."""
-        for x, y, z, r, g, b in pointcloudfile.read(self.file):
-            if self.is_ground([x, y, z]):
+        # We assume that vertex attributes not named "x", "y" or "z"
+        # are colours, and thus accumulate a total to get the mean
+        for p in pointcloudfile.read(self.file):
+            if self.is_ground(p):
                 continue
-            idx = coords([x, y])
-            R, G, B = self.colours.get(idx, (0, 0, 0))
-            self.colours[idx] = (R+r, G+g, B+b)
+            p_cols = {k: v for k, v in p._asdict().items() if k not in 'xyz'}
+            idx = coords(p)
+            if idx not in self.colours:
+                self.colours[idx] = p_cols
+            else:
+                for k, v in p_cols.items():
+                    self.colours[idx][k] += v
 
     def is_ground(self, point) -> bool:
         """Returns boolean whether the point is not classified as ground - ie
@@ -215,8 +221,6 @@ class MapObj:
         out['UTM_Y'] = y = self.offset.y + args.cellsize * (
             max(k[1] for k in keys) + min(k[1] for k in keys)) / 2
         out['UTM_zone'] = args.utmzone
-        name = 'unknown'  # get from matchtrees when implemented
-        out['name'] = name if name is not None else 'unknown'
         out['latitude'], out['longitude'] = utm_convert.UTM_to_LatLon(
             x, y, args.utmzone)
         out['area'] = len(keys) * args.cellsize**2
@@ -225,13 +229,9 @@ class MapObj:
         for k in keys:
             out['height'] = max(out.get('height', 0),
                                 self.canopy[k] - self.ground[k])
-            out['red'], out['green'], out['blue'] = (a+b for a, b in zip(
-                [out.get(k, 0) for k in ['red', 'green', 'blue']],
-                self.colours.get(k, [0, 0, 0])))
             out['point_count'] = out.get('point_count', 0) + self.density[k]
+        # TODO:  handle more flexible colour channels
         # Finally, normalise colour values and round position to confidence
-        for k in ['red', 'green', 'blue']:
-            out[k] = out[k] // out['point_count']
         for k in ['height', 'area', 'base_altitude']:
             out[k] = round(out[k], 2)
         for k in ['UTM_X', 'UTM_Y']:
@@ -258,7 +258,7 @@ class MapObj:
         newpoints = (point for point in pointcloudfile.read(self.file)
                      if canopy and not self.is_ground(point) or
                      lowest and self.is_lowest(point))
-        pointcloudfile.write(newpoints, new_fname, self.offset)
+        pointcloudfile.write(newpoints, new_fname, self.input_file)
         if lowest and canopy:
             self.file = new_fname
 
@@ -273,7 +273,7 @@ class MapObj:
         # Maps tree ID numbers to a incremental writer for that tree
         tree_to_file = {tree_ID: pointcloudfile.IncrementalWriter(
             os.path.join(args.savetrees, 'tree_{}.ply'.format(tree_ID)),
-            self.offset) for tree_ID in set(self.trees.values())}
+            self.input_file) for tree_ID in set(self.trees.values())}
         # For non-ground, find the appropriate writer and call with the point
         for point in pointcloudfile.read(self.file):
             val = self.trees.get(coords(point))
@@ -283,14 +283,12 @@ class MapObj:
 
 def stream_analysis(attr, out: str) -> None:
     """Saves the list of trees with attributes to the file 'out'."""
-    header = ('name', 'latitude', 'longitude', 'UTM_X', 'UTM_Y', 'UTM_zone',
-              'height', 'area', 'base_altitude',
-              'red', 'green', 'blue', 'point_count')
+    header = ('latitude', 'longitude', 'UTM_X', 'UTM_Y', 'UTM_zone',
+              'height', 'area', 'base_altitude', 'point_count')
     with open(out, 'w', newline='') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=header)
         writer.writeheader()
         for data in attr.all_trees():
-            data['name'] = '"{}"'.format(data['name'])
             writer.writerow(data)
 
 
