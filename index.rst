@@ -8,7 +8,7 @@ Welcome to the ``forestutils`` docs!
 User Documentation
 ==================
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
    :glob:
 
    docs/*
@@ -21,6 +21,7 @@ Code Documentation
    :maxdepth: 1
    :glob:
 
+   changelog
    docs/src/*
 
 .. include:: README.rst
