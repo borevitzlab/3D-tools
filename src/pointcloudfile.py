@@ -212,11 +212,10 @@ class IncrementalWriter:
 
     def __del__(self):
         """Flush data to disk and clean up."""
-        _, names, form_str, _ = parse_ply_header(
-            ply_header_text(self.source_fname))
+        header = parse_ply_header(ply_header_text(self.source_fname))
         to_ply_types = {v: k for k, v in PLY_TYPES.items()}
         properties = ['property {t} {n}'.format(t=t, n=n) for t, n in zip(
-            (to_ply_types[p] for p in form_str[1:]), names)]
+            (to_ply_types[p] for p in header.form_str[1:]), header.names)]
         head = ['ply',
                 'format binary_big_endian 1.0',
                 'element vertex {}'.format(self.count),

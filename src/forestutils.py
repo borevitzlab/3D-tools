@@ -22,19 +22,19 @@ Example outputs (from an older version):
 and `pointclouds <http://phenocam.org.au/pointclouds>`_.
 """
 # pylint:disable=unsubscriptable-object
-# TODO:  index point attributess by name only, not position
 
 import argparse
 import csv
 import math
 import os
-from typing import Tuple, Set
+from typing import MutableMapping, NamedTuple, Tuple, Set
 
 from . import pointcloudfile, utm_convert
 
 
 # User-defined types
-XY_Coord = Tuple[float, float]  # float is duck-type compatible with int too
+XY_Coord = NamedTuple('XY_Coord', [('x', float), ('y', float)])
+Coord_Labels = MutableMapping[XY_Coord, int]
 
 
 def coords(pos):
@@ -43,13 +43,75 @@ def coords(pos):
     * use floor() to avoid imprecise float issues"""
     x = math.floor(pos.x / args.cellsize)
     y = math.floor(pos.y / args.cellsize)
-    return x, y
+    return XY_Coord(x, y)
+
+
+def neighbors(key: XY_Coord) -> Tuple[XY_Coord, ...]:
+    """Return the adjacent keys, whether they exist or not."""
+    return tuple(XY_Coord(key.x + a, key.y + b)
+                 for a in (-1, 0, 1) for b in (-1, 0, 1) if a or b)
+
+
+def connected_components(input_dict: Coord_Labels) -> None:
+    """Connected components in a dict of coordinates.
+
+    Uses depth-first search.  Non-component cells are absent from the input.
+    """
+    def expand(old_key: XY_Coord, com: MutableMapping) -> None:
+        """Implement depth-first search."""
+        for key in neighbors(old_key):
+            if com.get(key) is None:
+                return
+            if com[key] == com[old_key]:
+                continue
+            elif com[key] < com[old_key]:
+                com[old_key] = com[key]
+            else:
+                com[key] = com[old_key]
+                expand(key, com)
+
+    for key in tuple(input_dict):
+        try:
+            expand(key, input_dict)
+        except RuntimeError:
+            # Recursion depth; finish on next pass.
+            continue
+
+
+def detect_issues(ground_dict: Coord_Labels, prior: set) -> Set[XY_Coord]:
+    """Identifies cells with more than 2:1 slope to 3+ adjacent cells."""
+    problematic = set()
+    for k in prior:
+        adjacent = {ground_dict.get(n) for n in neighbors(k)}
+        adjacent.discard(None)
+        if len(adjacent) < 6:
+            continue
+        # Number of cells at more than 2:1 slope - suspiciously steep.
+        # 3+ usually indicates a misclassified cell or data artefact.
+        probs = sum(abs(ground_dict[k]-n) > 2*args.cellsize for n in adjacent)
+        if probs >= 3:
+            problematic.add(k)
+    return problematic
+
+
+def smooth_ground(ground_dict: Coord_Labels) -> None:
+    """Smooths the ground map, to reduce the impact of spurious points, eg.
+    points far underground or misclassification of canopy as ground."""
+    problematic = set(ground_dict)
+    for _ in range(100):
+        problematic = detect_issues(ground_dict, problematic)
+        for key in problematic:
+            adjacent = {ground_dict.get(n) for n in neighbors(key)
+                        if n not in problematic}
+            adjacent.discard(None)
+            if not adjacent:
+                continue
+            ground_dict[key] = min(adjacent) + 2*args.cellsize
 
 
 class MapObj:
     """Stores a maximum and minimum height map of the cloud, in GRID_SIZE
     cells.  Hides data structure and accessed through coordinates."""
-    # pylint:disable=too-many-instance-attributes
 
     def __init__(self, input_file, *, colours=True, zone=55, south=True):
         """
@@ -93,7 +155,7 @@ class MapObj:
                 self.ground[idx] = p.z
             elif self.canopy[idx] < p.z:
                 self.canopy[idx] = p.z
-        self.__smooth_ground()
+        smooth_ground(self.ground)
         self.trees = self._tree_components()
 
     def update_colours(self):
@@ -125,92 +187,25 @@ class MapObj:
         """Total observed points."""
         return sum(self.density.values())
 
-    @staticmethod
-    def _neighbors(key):
-        """Return the adjacent keys, whether they exist or not."""
-        return ((key[0]+a, key[1]+b) for a, b in
-                [(1, 1), (1, 0), (1, -1),
-                 (0, 1), (0, -1),
-                 (-1, 1), (-1, 0), (-1, -1)])
-
-    def __problematic(self, prior: set=None) -> Set[XY_Coord]:
-        """Identifies cells with more than 2:1 slope to 3+ adjacent cells."""
-        problematic = set()
-        if prior is None:
-            prior = self.ground.keys()
-        for k in prior:
-            adjacent = {self.ground.get(n) for n in self._neighbors(k)}
-            adjacent.discard(None)
-            if len(adjacent) < 6:
-                continue
-            height = self.ground[k]
-            # Number of cells at more than 2:1 slope - suspiciously steep.
-            # 3+ usually indicates a misclassified cell or data artefact.
-            probs = sum(abs(height - n) > 2*args.cellsize for n in adjacent)
-            if probs >= 3:
-                problematic.add(k)
-        return problematic
-
-    def __smooth_ground(self):
-        """Smooths the ground map, to reduce the impact of spurious points, eg.
-        points far underground or misclassification of canopy as ground."""
-        problematic = self.__problematic()
-        for _ in range(10):
-            for key in problematic:
-                adjacent = {self.ground.get(n) for n in self._neighbors(key)
-                            if n not in problematic}
-                adjacent.discard(None)
-                if not adjacent:
-                    continue
-                self.ground[key] = min(adjacent) + 2*args.cellsize
-            prev = len(problematic)
-            problematic = self.__problematic(problematic)
-            if prev == 0 or len(problematic) / prev > 0.9:
-                break
-
-    def _tree_components(self):
+    def _tree_components(self) -> Coord_Labels:
         """Returns a dict where keys refer to connected components.
         NB: Not all keys in other dicts exist in this output."""
-        # pylint:disable=too-many-branches
-        def expand(old_key, com):
-            """Implement depth-first search."""
-            for key in self._neighbors(old_key):
-                if com.get(key) is None:
-                    return
-                if com[key] == com[old_key]:
-                    continue
-                elif com[key] < com[old_key]:
-                    com[old_key] = com[key]
-                else:
-                    com[key] = com[old_key]
-                    expand(key, com)
-
         # Set up a boolean array of larger keys to search
-        key_scale_record = dict()
+        key_scale_record = {}  # type: Dict[XY_Coord, Set[XY_Coord]]
         for key in self.density.keys():
             if self.canopy[key] - self.ground[key] > args.slicedepth:
-                cc_key = tuple(math.floor(k/args.joinedcells) for k in key)
+                cc_key = XY_Coord(math.floor(key.x / args.joinedcells),
+                                  math.floor(key.y / args.joinedcells))
                 if cc_key not in key_scale_record:
                     key_scale_record[cc_key] = {key}
                 else:
                     key_scale_record[cc_key].add(key)
         # Assign a unique integer value to each large key, then search
         # Final labels are positive ints, but not ordered or consecutive
-        com = dict()
-        for idx, key in enumerate(tuple(key_scale_record)):
-            com[key] = idx
-        for key in tuple(com):
-            try:
-                expand(key, com)
-            except RuntimeError:
-                # Recursion depth; finish on next pass.
-                continue
+        trees = {k: i for i, k in enumerate(tuple(key_scale_record))}
+        connected_components(trees)
         # Copy labels to grid of original scale
-        ret = dict()
-        for key, values in key_scale_record.items():
-            for skey in values:
-                ret[skey] = com[key]
-        return ret
+        return {s: trees[k] for k, v in key_scale_record.items() for s in v}
 
     def tree_data(self, keys):
         """Return a dictionary of data about the tree in the given keys."""
