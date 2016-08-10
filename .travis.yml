@@ -5,7 +5,6 @@ python:
 install: pip install -e .[test]
 script:
   - pylint src -d fixme
-  - nosetests
   - mypy src
   - sphinx-build -qW . _build/html
   - sh demo.sh

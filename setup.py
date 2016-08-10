@@ -12,7 +12,7 @@ with open('README.rst') as f:
 
 config = dict(
     name='forestutils',
-    version='0.2.0',
+    version='0.2.1',
     description='Tools to analyse 3D scans of a forest.',
     long_description=long_description,
 
@@ -39,7 +39,7 @@ config = dict(
     packages=['src'],
     install_requires=['utm'],
     extras_require={
-        'test': ['hypothesis', 'mypy-lang', 'nose', 'pylint', 'sphinx'],
+        'test': ['mypy-lang', 'pylint', 'sphinx'],
         },
     entry_points={'console_scripts': ['forestutils=src.forestutils:main']},
 )

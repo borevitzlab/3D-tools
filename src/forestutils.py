@@ -29,7 +29,7 @@ import math
 import os
 from typing import MutableMapping, NamedTuple, Tuple, Set
 
-import utm
+import utm  # type: ignore
 
 from . import pointcloudfile
 
@@ -233,7 +233,7 @@ class MapObj:
             out['point_count'] += self.density[k]
             for colour, total in self.colours[k].items():
                 out[colour] = total / self.density[k]
-        return {k: round(v, 3) for k, v in out.items()}
+        return out
 
     def all_trees(self):
         """Yield the characteristics of each tree."""

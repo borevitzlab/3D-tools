@@ -46,7 +46,7 @@ def offset_for(filename: str) -> Tuple[float, float, float]:
             x, y, z = tuple(float(n) for n in f.readline().strip().split(' '))
             return x, y, z
     for com in parse_ply_header(ply_header_text(filename))[3]:
-        if com.startswith('comment UTM x y zone south'):
+        if com.startswith('comment UTM x y zone north'):
             return float(com.split(' ')[-4]), float(com.split(' ')[-3]), 0
     return 0, 0, 0
 
@@ -221,8 +221,8 @@ class IncrementalWriter:
                 '\n'.join(properties),
                 'end_header']
         if self.utm is not None:
-            head.insert(-1, 'comment UTM x y zone south ' +
-                        '{0.x} {0.y} {0.zone} {0.south}'.format(self.utm))
+            head.insert(-1, 'comment UTM x y zone north ' +
+                        '{0.x} {0.y} {0.zone} {0.north}'.format(self.utm))
         if not os.path.isdir(os.path.dirname(self.filename)):
             os.makedirs(os.path.dirname(self.filename))
         with open(self.filename, 'wb') as f:
