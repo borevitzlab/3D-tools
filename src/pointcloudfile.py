@@ -24,13 +24,14 @@ import os.path
 from tempfile import SpooledTemporaryFile
 from typing import Iterator, List, NamedTuple, Tuple
 
-from . import utm_convert
 
 # User-defined types:
 Point = Tuple[float, ...]
 PlyHeader = NamedTuple('PlyHeader', [
     ('vertex_count', int), ('names', Tuple[str, ...]),
     ('form_str', str), ('comments', Tuple[str, ...])])
+UTM_Coord = NamedTuple('UTM_Coord', [
+    ('x', float), ('y', float), ('zone', int), ('north', bool)])
 
 # The various struct types of .ply binary format
 PLY_TYPES = {'float': 'f', 'double': 'd', 'uchar': 'B', 'char': 'b',
@@ -180,7 +181,7 @@ class IncrementalWriter:
     # pylint:disable=too-few-public-methods
 
     def __init__(self, filename: str, header: PlyHeader,
-                 utm: utm_convert.UTM_Coord=None, buffer=2**22) -> None:
+                 utm: UTM_Coord=None, buffer=2**22) -> None:
         """
         Args:
             filename: final place to save the file on disk.
@@ -235,7 +236,7 @@ class IncrementalWriter:
 
 
 def write(cloud: Iterator, fname: str, header: PlyHeader,
-          utm: utm_convert.UTM_Coord) -> None:
+          utm: UTM_Coord) -> None:
     """Write the given cloud to disk."""
     writer = IncrementalWriter(fname, header, utm)
     for p in cloud:

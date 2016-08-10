@@ -37,7 +37,7 @@ config = dict(
     ],
 
     packages=['src'],
-    install_requires=[],
+    install_requires=['utm'],
     extras_require={
         'test': ['hypothesis', 'mypy-lang', 'nose', 'pylint', 'sphinx'],
         },

@@ -29,7 +29,9 @@ import math
 import os
 from typing import MutableMapping, NamedTuple, Tuple, Set
 
-from . import pointcloudfile, utm_convert
+import utm
+
+from . import pointcloudfile
 
 
 # User-defined types
@@ -136,7 +138,7 @@ class MapObj:
         self.header = pointcloudfile.parse_ply_header(
             pointcloudfile.ply_header_text(input_file))
         x, y, _ = pointcloudfile.offset_for(input_file)
-        self.utm = utm_convert.UTM_Coord(x, y, args.utmzone, not args.north)
+        self.utm = pointcloudfile.UTM_Coord(x, y, args.utmzone, args.north)
 
         self.update_spatial()
         if colours:
@@ -194,7 +196,7 @@ class MapObj:
         NB: Not all keys in other dicts exist in this output."""
         # Set up a boolean array of larger keys to search
         key_scale_record = {}  # type: Dict[XY_Coord, Set[XY_Coord]]
-        for key in self.density.keys():
+        for key in self.density:
             if self.canopy[key] - self.ground[key] > args.slicedepth:
                 cc_key = XY_Coord(int(math.floor(key.x / args.joinedcells)),
                                   int(math.floor(key.y / args.joinedcells)))
@@ -214,7 +216,7 @@ class MapObj:
         # Calculate positional information
         x = self.utm.x + args.cellsize * sum(k.x for k in keys) / len(keys)
         y = self.utm.y + args.cellsize * sum(k.y for k in keys) / len(keys)
-        lat, lon = utm_convert.UTM_to_LatLon(x, y, args.utmzone)
+        lat, lon = utm.to_latlon(x, y, self.utm.zone, northern=self.utm.north)
         out = {
             'latitude': lat,
             'longitude': lon,
