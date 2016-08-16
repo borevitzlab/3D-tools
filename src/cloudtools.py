@@ -8,17 +8,24 @@ software such as Pix4D.
 """
 
 import argparse
-from collections import namedtuple
+import collections
 import contextlib
 import glob
 import os
 import pkg_resources
+import tempfile
+import time
 
 import numpy as np
 import plyfile
 
 
-UTM_COORD = namedtuple('UTMCoord', ['easting', 'northing', 'zone', 'northern'])
+UTM_COORD = collections.namedtuple(
+    'UTMCoord', ['easting', 'northing', 'zone', 'northern'])
+
+
+def get_tmpfile():
+    return tempfile.SpooledTemporaryFile(max_size=2**20)
 
 
 class GeoPly(plyfile.PlyData):
@@ -43,13 +50,12 @@ class GeoPly(plyfile.PlyData):
               (unlike XY, Z is small enougth that precision is not an issue)
             - removes Meshlab cruft if present (comment, empty alpha channel)
         """
-        # Read file, reconstruct as GeoPly instance, drop non-vertex elements
+        # Read file as GeoPly instance
         with open(filename, 'rb') as stream:
             data = GeoPly._parse_header(stream)
             for elt in data:
                 elt._read(stream, data.text, data.byte_order)
         verts = data['vertex']
-        data.elements = [verts]
 
         # Remove meshlab cruft
         if 'VCGLIB generated' in data.comments:
@@ -72,7 +78,6 @@ class GeoPly(plyfile.PlyData):
                 float(n) for n in f.readline().strip().split(' '))
         utm_coord = utm_coord._replace(easting=x, northing=y)
         verts['z'] += z
-
         for c in data.comments:
             fword, *rest = c.strip().split()
             if fword == 'utm_offset':
@@ -85,7 +90,15 @@ class GeoPly(plyfile.PlyData):
         if not (utm_coord.easting and utm_coord.northing):
             utm_coord = None
 
-        return GeoPly(data.elements, data.text, data.byte_order,
+        # replace the vertex data with a memmapped version of itself
+        if not isinstance(verts.data, np.memmap):
+            mmap = np.memmap(get_tmpfile(), dtype=verts.data.dtype,
+                             shape=verts.data.shape)
+            mmap[:] = verts.data[:]
+            verts.data = mmap
+
+        # Return as GeoPly instance with only vertex elements
+        return GeoPly([verts], data.text, data.byte_order,
                       data.comments, data.obj_info, utm_coord)
 
     def write(self, stream):
@@ -114,27 +127,35 @@ def concat(*geoplys):
     comments = [c for pf in geoplys for c in pf.comments]
     comments = sorted(set(comments), key=lambda k: comments.index(k))
 
-    # handle the relative UTM offsets
-    prime_offset = geoplys[0].utm_coord
-    all_verts = []
-    for pf in geoplys:
+    # paste arrays into single memmap, handling UTM offsets
+    ply_1, *ply_rest = geoplys
+    std_east, std_north = ply_1.utm_coord[:2]
+    to_arr = np.memmap(
+        get_tmpfile(), dtype=geoplys[0]['vertex'].data.dtype,
+        shape=(sum([p['vertex'].data.size for p in geoplys]),))
+    start = ply_1['vertex'].data.size
+    to_arr[:start] = ply_1['vertex'].data
+    for pf in ply_rest:
         arr = pf['vertex'].data
         if pf.utm_coord is not None:
-            arr['x'] += (pf.utm_coord.easting - prime_offset.easting)
-            arr['y'] += (pf.utm_coord.northing - prime_offset.northing)
-        all_verts.append(arr)
-    verts = plyfile.PlyElement.describe(np.concatenate(all_verts), 'vertex')
+            arr['x'] += (pf.utm_coord.easting - std_east)
+            arr['y'] += (pf.utm_coord.northing - std_north)
+        to_arr[start:start+arr.size] = arr
+        start += arr.size
+    verts = plyfile.PlyElement.describe(to_arr, 'vertex')
 
     # Load data back into the complete structure and return
-    return GeoPly([verts], comments=comments, utm_coord=prime_offset)
+    return GeoPly([verts], comments=comments, utm_coord=ply_1.utm_coord)
 
 
 def add_clouds(args):
     """A tester function to add things togther."""
     print('Concatenating input files...')
     output_file = os.path.join(args.output_dir, 'out.ply')
+    t1 = time.time()
     concat(*[GeoPly.read(f) for f in args.input_glob]).write(output_file)
-    print('Saved to ' + output_file)
+    t2 = time.time()
+    print('Saved to {} in {} seconds'.format(output_file, int(t2-t1)))
 
 
 def get_args():
