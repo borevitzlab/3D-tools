@@ -10,15 +10,21 @@ software such as Pix4D.
 import argparse
 import collections
 import contextlib
+import functools
 import glob
 import os
 import pkg_resources
 import tempfile
 import time
+import warnings
 
 import numpy as np
 import plyfile
 
+
+# I actually *want* the new numpy behaviour...
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=np.VisibleDeprecationWarning)
 
 UTM_COORD = collections.namedtuple(
     'UTMCoord', ['easting', 'northing', 'zone', 'northern'])
@@ -26,6 +32,26 @@ UTM_COORD = collections.namedtuple(
 
 def get_tmpfile():
     return tempfile.SpooledTemporaryFile(max_size=2**20)
+
+
+class reify:
+    """Use as a class method decorator.  It operates almost exactly like the
+    Python ``@property`` decorator, but it puts the result of the method it
+    decorates into the instance dict after the first call, effectively
+    replacing the function it decorates with an instance variable."""
+    # From Pyramid.  This allows us to write code as if the terrain array
+    # was an attribute calculated in advance, while only paying for this
+    # for instances where it is accessed.
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+        functools.update_wrapper(self, wrapped)
+
+    def __get__(self, inst, objtype=None):
+        if inst is None:
+            return self
+        val = self.wrapped(inst)
+        setattr(inst, self.wrapped.__name__, val)
+        return val
 
 
 class GeoPly(plyfile.PlyData):
@@ -39,6 +65,12 @@ class GeoPly(plyfile.PlyData):
         obj_info = obj_info or []
         super().__init__(elements, text, byte_order, comments, obj_info)
         self.utm_coord = utm_coord
+        # replace the vertex data with a memmapped version of itself
+        if not isinstance(self['vertex'].data, np.memmap):
+            mmap = np.memmap(get_tmpfile(), dtype=self['vertex'].data.dtype,
+                             shape=self['vertex'].data.shape)
+            mmap[:] = self['vertex'].data[:]
+            self['vertex'].data = mmap
 
     @staticmethod
     def read(filename):
@@ -61,23 +93,22 @@ class GeoPly(plyfile.PlyData):
         if 'VCGLIB generated' in data.comments:
             names = verts.data.dtype.names  # field names of each vertex
             if 'alpha' in names and 1 == len(np.unique(verts['alpha'])):
-                # removal of a vertex field is via fancy indexing
-                verts.data = verts.data[[n for n in names if n != 'alpha']]
                 # properties of the PlyElement instance are manually updated
                 verts.properties = [p for p in verts.properties
                                     if p.name != 'alpha']
+                # removal of a vertex field is via fancy indexing
+                verts.data = verts.data[[n for n in names if n != 'alpha']]
             data.comments.remove('VCGLIB generated')
 
         # Add UTM coordinates if known or discoverable
         utm_coord = UTM_COORD(0, 0, args.utmzone, args.northern)
         with contextlib.suppress(Exception):
-            pass
-        # First, let's try for a Pix4D-style offset file
-        with open(filename[:-4] + '_ply_offset.xyz') as f:
-            x, y, z = tuple(
-                float(n) for n in f.readline().strip().split(' '))
-        utm_coord = utm_coord._replace(easting=x, northing=y)
-        verts['z'] += z
+            # First, let's try for a Pix4D-style offset file
+            with open(filename[:-4] + '_ply_offset.xyz') as f:
+                x, y, z = tuple(
+                    float(n) for n in f.readline().strip().split(' '))
+            utm_coord = utm_coord._replace(easting=x, northing=y)
+            verts['z'] += z
         for c in data.comments:
             fword, *rest = c.strip().split()
             if fword == 'utm_offset':
@@ -89,13 +120,6 @@ class GeoPly(plyfile.PlyData):
                 utm_coord = utm_coord._replace(northern=(rest[0] == 'True'))
         if not (utm_coord.easting and utm_coord.northing):
             utm_coord = None
-
-        # replace the vertex data with a memmapped version of itself
-        if not isinstance(verts.data, np.memmap):
-            mmap = np.memmap(get_tmpfile(), dtype=verts.data.dtype,
-                             shape=verts.data.shape)
-            mmap[:] = verts.data[:]
-            verts.data = mmap
 
         # Return as GeoPly instance with only vertex elements
         return GeoPly([verts], data.text, data.byte_order,
@@ -109,6 +133,37 @@ class GeoPly(plyfile.PlyData):
                 'utm_offset {} {}\nutm_zone {}\nutm_northern {}'.format(
                     *self.utm_coord).split('\n'))
         super().write(stream)
+
+    @reify
+    def terrain(self):
+        """An array describing the terrain and trees in the pointcloud."""
+        verts = self['vertex'].data
+        min_x, min_y = (np.floor(verts[c].min()) for c in 'xy')
+        other_names = tuple(n for n in verts.dtype.names if n not in 'xyz')
+
+        shape = tuple(np.ceil((verts[c].max() - verts[c].min() + 1) /
+                              args.cellsize) for c in 'xy')
+        dtype = [('points', 'i4'), ('ground', 'f4'), ('canopy', 'f4')] + [
+            (name, 'f8' if 'f' in dt else ('u4' if 'u' in dt else 'i4'))
+            for name, dt in verts.dtype.descr if name not in 'xyz']
+        terrain = np.zeros(shape, dtype=dtype)
+        terrain['ground'] = np.inf
+        terrain['canopy'] = -np.inf
+
+        # TODO:  move XY->idx conversion to array operations for speed
+
+        for vert in verts:
+            tx = terrain[(np.floor((vert['x'] - min_x) / args.cellsize),
+                          np.floor((vert['y'] - min_y) / args.cellsize))]
+            tx['points'] += 1
+            if tx['ground'] > vert['z']:
+                tx['ground'] = vert['z']
+            if tx['canopy'] < vert['z']:
+                tx['canopy'] = vert['z']
+            for n in other_names:
+                tx[n] += vert[n]
+
+        return terrain
 
 
 def concat(*geoplys):
@@ -151,9 +206,12 @@ def add_clouds(args):
     print('Concatenating input files...')
     output_file = os.path.join(args.output_dir, 'out.ply')
     t1 = time.time()
-    concat(*[GeoPly.read(f) for f in args.input_glob]).write(output_file)
+    out = concat(*[GeoPly.read(f) for f in args.input_glob])
+    out.write(output_file)
     t2 = time.time()
     print('Saved to {} in {} seconds'.format(output_file, int(t2-t1)))
+    print(out.terrain['points'])
+    print('Took {} seconds to generate terrain'.format(int(time.time()-t2)))
 
 
 def get_args():
