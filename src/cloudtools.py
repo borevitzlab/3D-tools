@@ -129,7 +129,6 @@ def concat(*geoplys):
 
     # paste arrays into single memmap, handling UTM offsets
     ply_1, *ply_rest = geoplys
-    std_east, std_north = ply_1.utm_coord[:2]
     to_arr = np.memmap(
         get_tmpfile(), dtype=geoplys[0]['vertex'].data.dtype,
         shape=(sum([p['vertex'].data.size for p in geoplys]),))
@@ -137,9 +136,8 @@ def concat(*geoplys):
     to_arr[:start] = ply_1['vertex'].data
     for pf in ply_rest:
         arr = pf['vertex'].data
-        if pf.utm_coord is not None:
-            arr['x'] += (pf.utm_coord.easting - std_east)
-            arr['y'] += (pf.utm_coord.northing - std_north)
+        arr['x'] += (pf.utm_coord.easting - ply_1.utm_coord.easting)
+        arr['y'] += (pf.utm_coord.northing - ply_1.utm_coord.northing)
         to_arr[start:start+arr.size] = arr
         start += arr.size
     verts = plyfile.PlyElement.describe(to_arr, 'vertex')
@@ -179,6 +177,7 @@ def get_args():
             raise argparse.ArgumentTypeError('path is not a directory')
         return val
 
+    df = ' default=%(default)s'
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         '-V', '--version', action='version',
@@ -194,21 +193,22 @@ def get_args():
     filt_g = parser.add_argument_group('Filtering Args')
     filt_g.add_argument(
         '--cellsize', default=0.1, type=float,
-        help='size of the grid; optimal at ~10x point spacing')
+        help=('edge length of the analysis pixels in meters.  Around 10 times'
+              ' point spacing seems to give good results.' + df))
     filt_g.add_argument(
-        '--grounddepth', default=0.2, type=float,
-        help='depth above lowest point per cell to omit from output')
+        '--grassdepth', metavar='DEPTH', default=0.2, type=float,
+        help=('filter out points less than this height in meters above lowest'
+              ' point per cell.  n <= 0 disables this filter.' + df))
 
     geo_g = parser.add_argument_group('Geolocation Args')
     geo_g.add_argument(
         '--utmzone', default=55, type=int, choices=range(1, 61),
-        metavar='[1..60]', help='the UTM coordinate zone of the data')
+        metavar='[1..60]', help='the UTM coordinate zone of the data,' + df)
     ns_g = geo_g.add_mutually_exclusive_group()
     ns_g.add_argument('--northern', action='store_true',
-                      help='set if the data is in the northern hemisphere')
-    ns_g.add_argument('--southern', action='store_true',
-                      default=True,
-                      help='set if the data is in the southern hemisphere')
+                      help='for data in the northern hemisphere,' + df)
+    ns_g.add_argument('--southern', action='store_true', default=True,
+                      help='for data in the southern hemisphere,' + df)
 
     return parser.parse_args()
 
