@@ -138,9 +138,9 @@ class GeoPly(plyfile.PlyData):
     def terrain(self):
         """An array describing the terrain and trees in the pointcloud."""
         verts = self['vertex'].data
-        min_x, min_y = (np.floor(verts[c].min()) for c in 'xy')
         other_names = tuple(n for n in verts.dtype.names if n not in 'xyz')
 
+        # set up terrain array
         shape = tuple(np.ceil((verts[c].max() - verts[c].min() + 1) /
                               args.cellsize) for c in 'xy')
         dtype = [('points', 'i4'), ('ground', 'f4'), ('canopy', 'f4')] + [
@@ -150,16 +150,22 @@ class GeoPly(plyfile.PlyData):
         terrain['ground'] = np.inf
         terrain['canopy'] = -np.inf
 
-        # TODO:  move XY->idx conversion to array operations for speed
+        # XY->idx conversion is done with array operations for speed
+        indicies = np.zeros((verts.size,), dtype=[('x', 'f4'), ('y', 'f4')])
+        indicies['x'] = (verts['x'] - verts['x'].min()) / args.cellsize
+        indicies['y'] = (verts['y'] - verts['y'].min()) / args.cellsize
+        indicies = indicies.astype([('x index', 'u2'), ('y index', 'u2')],
+                                   casting='unsafe', copy=False)
 
-        for vert in verts:
-            tx = terrain[(np.floor((vert['x'] - min_x) / args.cellsize),
-                          np.floor((vert['y'] - min_y) / args.cellsize))]
+        # TODO:  vectorise or otherwise speed up this bit
+        for idx, vert in zip(indicies, verts):
+            tx = terrain[idx['x index'], idx['y index']]
             tx['points'] += 1
-            if tx['ground'] > vert['z']:
-                tx['ground'] = vert['z']
-            if tx['canopy'] < vert['z']:
-                tx['canopy'] = vert['z']
+            z = vert['z']
+            if z < tx['ground']:
+                tx['ground'] = z
+            if z > tx['canopy']:
+                tx['canopy'] = z
             for n in other_names:
                 tx[n] += vert[n]
 
@@ -209,9 +215,10 @@ def add_clouds(args):
     out = concat(*[GeoPly.read(f) for f in args.input_glob])
     out.write(output_file)
     t2 = time.time()
-    print('Saved to {} in {} seconds'.format(output_file, int(t2-t1)))
-    print(out.terrain['points'])
-    print('Took {} seconds to generate terrain'.format(int(time.time()-t2)))
+    print('Saved to {} in {:.3} seconds'.format(output_file, t2-t1))
+    if out.terrain.size:
+        pass
+    print('Took {:.3} seconds to generate terrain'.format(time.time()-t2))
 
 
 def get_args():
