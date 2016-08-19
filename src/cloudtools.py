@@ -151,11 +151,7 @@ class GeoPly(plyfile.PlyData):
         terrain['canopy'] = -np.inf
 
         # XY->idx conversion is done with array operations for speed
-        indicies = np.zeros((verts.size,), dtype=[('x', 'f4'), ('y', 'f4')])
-        indicies['x'] = (verts['x'] - verts['x'].min()) / args.cellsize
-        indicies['y'] = (verts['y'] - verts['y'].min()) / args.cellsize
-        indicies = indicies.astype([('x index', 'u2'), ('y index', 'u2')],
-                                   casting='unsafe', copy=False)
+        indicies = indices_for(verts)
 
         # TODO:  vectorise or otherwise speed up this bit
         for idx, vert in zip(indicies, verts):
@@ -170,6 +166,30 @@ class GeoPly(plyfile.PlyData):
                 tx[n] += vert[n]
 
         return terrain
+
+
+def indices_for(verts):
+    """Return index array for the given verticies."""
+    # XY->idx conversion is done with array operations for speed
+    indicies = np.zeros((verts.size,),
+                        dtype=[('x index', 'f4'), ('y index', 'f4')])
+    indicies['x index'] = (verts['x'] - verts['x'].min()) / args.cellsize
+    indicies['y index'] = (verts['y'] - verts['y'].min()) / args.cellsize
+    return indicies.astype([('x index', 'u2'), ('y index', 'u2')],
+                           casting='unsafe', copy=False)
+
+
+def filter_ply(geoply):
+    """Filter undesirable points out of the geoply."""
+    # TODO:  filter on polygon boundary (GeoJSON) by marking terrain
+    if args.grassdepth <= 0:
+        return geoply
+    verts = geoply['vertex'].data
+    ground = np.array([geoply.terrain[idx['x index'], idx['y index']]['ground']
+                       for idx, vert in zip(indices_for(verts), verts)])
+    geoply['vertex'].data = verts[np.equal(verts['z'], ground) |
+                                  ((verts['z'] - ground) > args.grassdepth)]
+    return geoply
 
 
 def concat(*geoplys):
@@ -212,13 +232,13 @@ def add_clouds(args):
     print('Concatenating input files...')
     output_file = os.path.join(args.output_dir, 'out.ply')
     t1 = time.time()
-    out = concat(*[GeoPly.read(f) for f in args.input_glob])
+    out = filter_ply(concat(*[GeoPly.read(f) for f in args.input_glob]))
     out.write(output_file)
     t2 = time.time()
-    print('Saved to {} in {:.3} seconds'.format(output_file, t2-t1))
+    print('Saved to {} in {:.3f} seconds'.format(output_file, t2-t1))
     if out.terrain.size:
         pass
-    print('Took {:.3} seconds to generate terrain'.format(time.time()-t2))
+    print('Took {:.3f} seconds to generate terrain'.format(time.time()-t2))
 
 
 def get_args():
