@@ -110,14 +110,12 @@ class GeoPly(plyfile.PlyData):
             utm_coord = utm_coord._replace(easting=x, northing=y)
             verts['z'] += z
         for c in data.comments:
-            fword, *rest = c.strip().split()
-            if fword == 'utm_offset':
-                utm_coord = utm_coord._replace(
-                    easting=float(rest[0]), northing=float(rest[1]))
-            elif fword == 'utm_zone':
-                utm_coord = utm_coord._replace(zone=int(rest[0]))
-            elif fword == 'utm_northern':
-                utm_coord = utm_coord._replace(northern=(rest[0] == 'True'))
+            if c.startswith('utm_'):
+                types = {'northing': float, 'easting': float, 'zone': int,
+                         'northern': lambda b: b == 'True'}
+                attr, val = c.replace('utm_', '').split()
+                setattr(utm_coord, attr, types[attr](val))
+                data.comments.remove(c)
         if not (utm_coord.easting and utm_coord.northing):
             utm_coord = None
 
@@ -128,10 +126,12 @@ class GeoPly(plyfile.PlyData):
     def write(self, stream):
         """Write to a file, serialising utm_coord as a special comment."""
         if self.utm_coord is not None:
-            self.comments = [c for c in self.comments if c[:4] != 'utm_']
-            self.comments.extend(
-                'utm_offset {} {}\nutm_zone {}\nutm_northern {}'.format(
-                    *self.utm_coord).split('\n'))
+            if any(c.startswith('utm_') for c in self.comments):
+                # TODO:  log warning
+                self.comments = [c for c in self.comments if c[:4] != 'utm_']
+            for attr in ('northing', 'easting', 'zone', 'northern'):
+                self.comments.append(
+                    'utm_{0} {1}'.format(attr, self.utm_coord._asdict()[attr]))
         super().write(stream)
 
     @reify
@@ -150,11 +150,8 @@ class GeoPly(plyfile.PlyData):
         terrain['ground'] = np.inf
         terrain['canopy'] = -np.inf
 
-        # XY->idx conversion is done with array operations for speed
-        indicies = indices_for(verts)
-
         # TODO:  vectorise or otherwise speed up this bit
-        for idx, vert in zip(indicies, verts):
+        for idx, vert in zip(indices_for(verts), verts):
             tx = terrain[idx['x index'], idx['y index']]
             tx['points'] += 1
             z = vert['z']
@@ -172,11 +169,10 @@ def indices_for(verts):
     """Return index array for the given verticies."""
     # XY->idx conversion is done with array operations for speed
     indicies = np.zeros((verts.size,),
-                        dtype=[('x index', 'f4'), ('y index', 'f4')])
-    indicies['x index'] = (verts['x'] - verts['x'].min()) / args.cellsize
-    indicies['y index'] = (verts['y'] - verts['y'].min()) / args.cellsize
-    return indicies.astype([('x index', 'u2'), ('y index', 'u2')],
-                           casting='unsafe', copy=False)
+                        dtype=[('x index', 'u2'), ('y index', 'u2')])
+    indicies['x index'] = (verts['x'] - verts['x'].min()) // args.cellsize
+    indicies['y index'] = (verts['y'] - verts['y'].min()) // args.cellsize
+    return indicies
 
 
 def filter_ply(geoply):
@@ -186,7 +182,7 @@ def filter_ply(geoply):
         return geoply
     verts = geoply['vertex'].data
     ground = np.array([geoply.terrain[idx['x index'], idx['y index']]['ground']
-                       for idx, vert in zip(indices_for(verts), verts)])
+                       for idx in indices_for(verts)])
     geoply['vertex'].data = verts[np.equal(verts['z'], ground) |
                                   ((verts['z'] - ground) > args.grassdepth)]
     return geoply
@@ -232,13 +228,11 @@ def add_clouds(args):
     print('Concatenating input files...')
     output_file = os.path.join(args.output_dir, 'out.ply')
     t1 = time.time()
-    out = filter_ply(concat(*[GeoPly.read(f) for f in args.input_glob]))
-    out.write(output_file)
+    out = concat(*[GeoPly.read(f) for f in args.input_glob])
     t2 = time.time()
-    print('Saved to {} in {:.3f} seconds'.format(output_file, t2-t1))
-    if out.terrain.size:
-        pass
-    print('Took {:.3f} seconds to generate terrain'.format(time.time()-t2))
+    print('Concat took {:.3f} seconds'.format(t2-t1))
+    filter_ply(out).write(output_file)
+    print('{:.3f} seconds for terrain and write'.format(time.time()-t2))
 
 
 def get_args():
