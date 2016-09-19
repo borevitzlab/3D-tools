@@ -111,8 +111,8 @@ class GeoPly(plyfile.PlyData):
             verts['z'] += z
         for c in data.comments:
             if c.startswith('utm_'):
-                types = {'northing': float, 'easting': float, 'zone': int,
-                         'northern': lambda b: b == 'True'}
+                types = dict(zip(UTM_COORD._fields,
+                                 [float, float, int, lambda b: b == 'True']))
                 attr, val = c.replace('utm_', '').split()
                 setattr(utm_coord, attr, types[attr](val))
                 data.comments.remove(c)
@@ -129,9 +129,8 @@ class GeoPly(plyfile.PlyData):
             if any(c.startswith('utm_') for c in self.comments):
                 # TODO:  log warning
                 self.comments = [c for c in self.comments if c[:4] != 'utm_']
-            for attr in ('northing', 'easting', 'zone', 'northern'):
-                self.comments.append(
-                    'utm_{0} {1}'.format(attr, self.utm_coord._asdict()[attr]))
+            for attr, val in zip(UTM_COORD._fields, self.utm_coord):
+                self.comments.append('utm_{0} {1}'.format(attr, val))
         super().write(stream)
 
     @reify

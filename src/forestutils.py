@@ -80,37 +80,6 @@ def connected_components(input_dict: Coord_Labels) -> None:
             continue
 
 
-def detect_issues(ground_dict: Coord_Labels, prior: set) -> Set[XY_Coord]:
-    """Identifies cells with more than 2:1 slope to 3+ adjacent cells."""
-    problematic = set()
-    for k in prior:
-        adjacent = {ground_dict.get(n) for n in neighbors(k)}
-        adjacent.discard(None)
-        if len(adjacent) < 6:
-            continue
-        # Number of cells at more than 2:1 slope - suspiciously steep.
-        # 3+ usually indicates a misclassified cell or data artefact.
-        probs = sum(abs(ground_dict[k]-n) > 2*args.cellsize for n in adjacent)
-        if probs >= 3:
-            problematic.add(k)
-    return problematic
-
-
-def smooth_ground(ground_dict: Coord_Labels) -> None:
-    """Smooths the ground map, to reduce the impact of spurious points, eg.
-    points far underground or misclassification of canopy as ground."""
-    problematic = set(ground_dict)
-    for _ in range(100):
-        problematic = detect_issues(ground_dict, problematic)
-        for key in problematic:
-            adjacent = {ground_dict.get(n) for n in neighbors(key)
-                        if n not in problematic}
-            adjacent.discard(None)
-            if not adjacent:
-                continue
-            ground_dict[key] = min(adjacent) + 2*args.cellsize
-
-
 class MapObj:
     """Stores a maximum and minimum height map of the cloud, in GRID_SIZE
     cells.  Hides data structure and accessed through coordinates."""
@@ -159,7 +128,6 @@ class MapObj:
                 self.ground[idx] = p.z
             elif self.canopy[idx] < p.z:
                 self.canopy[idx] = p.z
-        smooth_ground(self.ground)
         self.trees = self._tree_components()
 
     def update_colours(self):
