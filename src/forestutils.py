@@ -97,7 +97,7 @@ class MapObj:
             zone (int): the UTM zone of the site.
             south (bool): if the site is in the southern hemisphere.
         """
-        self.file = input_file
+        self.__file = input_file
         self.canopy = dict()
         self.density = dict()
         self.ground = dict()
@@ -113,10 +113,15 @@ class MapObj:
         if colours:
             self.update_colours()
 
+    @property
+    def vertices(self):
+        """An iterator over the vertices in the pointcloud."""
+        yield from pointcloudfile.read(self.__file)
+
     def update_spatial(self):
         """Expand, correct, or maintain map with a new observed point."""
         # Fill out the spatial info in the file
-        for p in pointcloudfile.read(self.file):
+        for p in self.vertices:
             idx = coords(p)
             if self.density.get(idx) is None:
                 self.density[idx] = 1
@@ -134,7 +139,7 @@ class MapObj:
         """Expand, correct, or maintain map with a new observed point."""
         # We assume that vertex attributes not named "x", "y" or "z"
         # are colours, and thus accumulate a total to get the mean
-        for p in pointcloudfile.read(self.file):
+        for p in self.vertices:
             if self.is_ground(p):
                 continue
             p_cols = {k: v for k, v in p._asdict().items() if k not in 'xyz'}
@@ -220,12 +225,12 @@ class MapObj:
     def save_sparse_cloud(self, new_fname, lowest=True, canopy=True):
         """Yield points for a sparse point cloud, eliminating ~3/4 of all
         points without affecting analysis."""
-        newpoints = (point for point in pointcloudfile.read(self.file)
+        newpoints = (point for point in self.vertices
                      if canopy and not self.is_ground(point) or
                      lowest and self.is_lowest(point))
         pointcloudfile.write(newpoints, new_fname, self.header, self.utm)
         if lowest and canopy:
-            self.file = new_fname
+            self.__file = new_fname
 
     def save_individual_trees(self):
         """Save single trees to files."""
@@ -240,7 +245,7 @@ class MapObj:
             os.path.join(args.savetrees, 'tree_{}.ply'.format(tree_ID)),
             self.header, self.utm) for tree_ID in set(self.trees.values())}
         # For non-ground, find the appropriate writer and call with the point
-        for point in pointcloudfile.read(self.file):
+        for point in self.vertices:
             val = self.trees.get(coords(point))
             if val is not None:
                 tree_to_file[val](point)

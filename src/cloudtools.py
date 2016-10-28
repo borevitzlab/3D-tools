@@ -46,7 +46,7 @@ class reify:
         self.wrapped = wrapped
         functools.update_wrapper(self, wrapped)
 
-    def __get__(self, inst, objtype=None):
+    def __get__(self, inst):
         if inst is None:
             return self
         val = self.wrapped(inst)

@@ -51,4 +51,4 @@ Useful links
 - `source code <https://github.com/borevitzlab/3D-tools>`_
 - `forestutils package <https://pypi.python.org/pypi/forestutils>`_ on PyPi
 
-Contact: *zac.hatfield.dodds at gmail.com*
+Contact: *zac.hatfield.dodds@anu.edu.au*
