@@ -8,160 +8,40 @@ software such as Pix4D.
 """
 
 import argparse
-import collections
-import contextlib
-import functools
 import glob
+import math
 import os
-import pkg_resources
-import tempfile
 import time
-import warnings
 
 import numpy as np
-import plyfile
+
+from geoply import GeoPly
 
 
-# I actually *want* the new numpy behaviour...
-warnings.filterwarnings('ignore', category=FutureWarning)
-warnings.filterwarnings('ignore', category=np.VisibleDeprecationWarning)
-
-UTM_COORD = collections.namedtuple(
-    'UTMCoord', ['easting', 'northing', 'zone', 'northern'])
-
-
-def get_tmpfile():
-    return tempfile.SpooledTemporaryFile(max_size=2**20)
-
-
-class reify:
-    """Use as a class method decorator.  It operates almost exactly like the
-    Python ``@property`` decorator, but it puts the result of the method it
-    decorates into the instance dict after the first call, effectively
-    replacing the function it decorates with an instance variable."""
-    # From Pyramid.  This allows us to write code as if the terrain array
-    # was an attribute calculated in advance, while only paying for this
-    # for instances where it is accessed.
-    def __init__(self, wrapped):
-        self.wrapped = wrapped
-        functools.update_wrapper(self, wrapped)
-
-    def __get__(self, inst):
-        if inst is None:
-            return self
-        val = self.wrapped(inst)
-        setattr(inst, self.wrapped.__name__, val)
-        return val
-
-
-class GeoPly(plyfile.PlyData):
-    """Represents a pointcloud in the UTM coordinate system including zone,
-    hemisphere, and offset (due to f32 imprecision)."""
-
-    def __init__(self, elements=None, text=False, byte_order='=',
-                 comments=None, obj_info=None, utm_coord=None):
-        elements = elements or []
-        comments = comments or []
-        obj_info = obj_info or []
-        super().__init__(elements, text, byte_order, comments, obj_info)
-        self.utm_coord = utm_coord
-        # replace the vertex data with a memmapped version of itself
-        if not isinstance(self['vertex'].data, np.memmap):
-            mmap = np.memmap(get_tmpfile(), dtype=self['vertex'].data.dtype,
-                             shape=self['vertex'].data.shape)
-            mmap[:] = self['vertex'].data[:]
-            self['vertex'].data = mmap
-
-    @staticmethod
-    def read(filename):
-        """Reads a vertex set from the given file.
-        Additionally:
-            - drops non-"vertex" elements if present
-            - adds a self.utm_coord attribute
-            - applies Pix4D altitude offset
-              (unlike XY, Z is small enougth that precision is not an issue)
-            - removes Meshlab cruft if present (comment, empty alpha channel)
-        """
-        # Read file as GeoPly instance
-        with open(filename, 'rb') as stream:
-            data = GeoPly._parse_header(stream)
-            for elt in data:
-                elt._read(stream, data.text, data.byte_order)
-        verts = data['vertex']
-
-        # Remove meshlab cruft
-        if 'VCGLIB generated' in data.comments:
-            names = verts.data.dtype.names  # field names of each vertex
-            if 'alpha' in names and 1 == len(np.unique(verts['alpha'])):
-                # properties of the PlyElement instance are manually updated
-                verts.properties = [p for p in verts.properties
-                                    if p.name != 'alpha']
-                # removal of a vertex field is via fancy indexing
-                verts.data = verts.data[[n for n in names if n != 'alpha']]
-            data.comments.remove('VCGLIB generated')
-
-        # Add UTM coordinates if known or discoverable
-        utm_coord = UTM_COORD(0, 0, args.utmzone, args.northern)
-        with contextlib.suppress(Exception):
-            # First, let's try for a Pix4D-style offset file
-            with open(filename[:-4] + '_ply_offset.xyz') as f:
-                x, y, z = tuple(
-                    float(n) for n in f.readline().strip().split(' '))
-            utm_coord = utm_coord._replace(easting=x, northing=y)
-            verts['z'] += z
-        for c in data.comments:
-            if c.startswith('utm_'):
-                types = dict(zip(UTM_COORD._fields,
-                                 [float, float, int, lambda b: b == 'True']))
-                attr, val = c.replace('utm_', '').split()
-                setattr(utm_coord, attr, types[attr](val))
-                data.comments.remove(c)
-        if not (utm_coord.easting and utm_coord.northing):
-            utm_coord = None
-
-        # Return as GeoPly instance with only vertex elements
-        return GeoPly([verts], data.text, data.byte_order,
-                      data.comments, data.obj_info, utm_coord)
-
-    def write(self, stream):
-        """Write to a file, serialising utm_coord as a special comment."""
-        if self.utm_coord is not None:
-            if any(c.startswith('utm_') for c in self.comments):
-                # TODO:  log warning
-                self.comments = [c for c in self.comments if c[:4] != 'utm_']
-            for attr, val in zip(UTM_COORD._fields, self.utm_coord):
-                self.comments.append('utm_{0} {1}'.format(attr, val))
-        super().write(stream)
-
-    @reify
-    def terrain(self):
-        """An array describing the terrain and trees in the pointcloud."""
-        verts = self['vertex'].data
-        other_names = tuple(n for n in verts.dtype.names if n not in 'xyz')
-
-        # set up terrain array
-        shape = tuple(np.ceil((verts[c].max() - verts[c].min() + 1) /
-                              args.cellsize) for c in 'xy')
-        dtype = [('points', 'i4'), ('ground', 'f4'), ('canopy', 'f4')] + [
-            (name, 'f8' if 'f' in dt else ('u4' if 'u' in dt else 'i4'))
-            for name, dt in verts.dtype.descr if name not in 'xyz']
-        terrain = np.zeros(shape, dtype=dtype)
-        terrain['ground'] = np.inf
-        terrain['canopy'] = -np.inf
-
-        # TODO:  vectorise or otherwise speed up this bit
-        for idx, vert in zip(indices_for(verts), verts):
-            tx = terrain[idx['x index'], idx['y index']]
-            tx['points'] += 1
-            z = vert['z']
-            if z < tx['ground']:
-                tx['ground'] = z
-            if z > tx['canopy']:
-                tx['canopy'] = z
-            for n in other_names:
-                tx[n] += vert[n]
-
-        return terrain
+def terrain(verts):
+    """An array describing the terrain and trees in the pointcloud."""
+    # FIXME: replace with faster implementation based on forestutils
+    other_names = tuple(n for n in verts.dtype.names if n not in 'xyz')
+    # set up terrain array
+    shape = tuple(math.ceil((verts[c].max() - verts[c].min() + 1) /
+                            args.cellsize) for c in 'xy')
+    dtype = [('points', 'i4'), ('ground', 'f4'), ('canopy', 'f4')] + [
+        (name, 'f8' if 'f' in dt else ('u4' if 'u' in dt else 'i4'))
+        for name, dt in verts.dtype.descr if name not in 'xyz']
+    terrain = np.zeros(shape, dtype=dtype)
+    terrain['ground'] = np.inf
+    terrain['canopy'] = -np.inf
+    for idx, vert in zip(indices_for(verts), verts):
+        tx = terrain[idx['x index'], idx['y index']]
+        tx['points'] += 1
+        z = vert['z']
+        if z < tx['ground']:
+            tx['ground'] = z
+        if z > tx['canopy']:
+            tx['canopy'] = z
+        for n in other_names:
+            tx[n] += vert[n]
+    return terrain
 
 
 def indices_for(verts):
@@ -180,46 +60,11 @@ def filter_ply(geoply):
     if args.grassdepth <= 0:
         return geoply
     verts = geoply['vertex'].data
-    ground = np.array([geoply.terrain[idx['x index'], idx['y index']]['ground']
+    ground = np.array([terrain(verts)[idx['x index'], idx['y index']]['ground']
                        for idx in indices_for(verts)])
     geoply['vertex'].data = verts[np.equal(verts['z'], ground) |
                                   ((verts['z'] - ground) > args.grassdepth)]
     return geoply
-
-
-def concat(*geoplys):
-    """Return a GeoPly instance with the vertex elements from all inputs.
-    """
-    if not geoplys:
-        return GeoPly()
-    # do some sanity-checking
-    assert all(isinstance(p, GeoPly) for p in geoplys)
-    assert all(p.utm_coord is not None for p in geoplys)
-    assert len(set(p.utm_coord.zone for p in geoplys)) == 1
-    assert len(set(p.utm_coord.northern for p in geoplys)) == 1
-    assert len(set(p['vertex'].data.dtype for p in geoplys)) == 1
-
-    # flatten and deduplicate comments
-    comments = [c for pf in geoplys for c in pf.comments]
-    comments = sorted(set(comments), key=lambda k: comments.index(k))
-
-    # paste arrays into single memmap, handling UTM offsets
-    ply_1, *ply_rest = geoplys
-    to_arr = np.memmap(
-        get_tmpfile(), dtype=geoplys[0]['vertex'].data.dtype,
-        shape=(sum([p['vertex'].data.size for p in geoplys]),))
-    start = ply_1['vertex'].data.size
-    to_arr[:start] = ply_1['vertex'].data
-    for pf in ply_rest:
-        arr = pf['vertex'].data
-        arr['x'] += (pf.utm_coord.easting - ply_1.utm_coord.easting)
-        arr['y'] += (pf.utm_coord.northing - ply_1.utm_coord.northing)
-        to_arr[start:start+arr.size] = arr
-        start += arr.size
-    verts = plyfile.PlyElement.describe(to_arr, 'vertex')
-
-    # Load data back into the complete structure and return
-    return GeoPly([verts], comments=comments, utm_coord=ply_1.utm_coord)
 
 
 def add_clouds(args):
@@ -227,7 +72,8 @@ def add_clouds(args):
     print('Concatenating input files...')
     output_file = os.path.join(args.output_dir, 'out.ply')
     t1 = time.time()
-    out = concat(*[GeoPly.read(f) for f in args.input_glob])
+    in_ = [GeoPly.read(f) for f in args.input_glob]
+    out = GeoPly.from_geoplys(*in_) if len(in_) > 1 else in_[0]
     t2 = time.time()
     print('Concat took {:.3f} seconds'.format(t2-t1))
     filter_ply(out).write(output_file)
@@ -257,9 +103,6 @@ def get_args():
 
     df = ' default=%(default)s'
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        '-V', '--version', action='version',
-        version=pkg_resources.get_distribution('forestutils').version)
 
     io_g = parser.add_argument_group('Input/Output Args')
     io_g.add_argument(
