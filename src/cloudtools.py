@@ -18,21 +18,21 @@ import numpy as np
 from geoply import GeoPly
 
 
-def terrain(verts):
+def terrain(verts, cellsize):
     """An array describing the terrain and trees in the pointcloud."""
     # FIXME: replace with faster implementation based on forestutils
     other_names = tuple(n for n in verts.dtype.names if n not in 'xyz')
     # set up terrain array
     shape = tuple(math.ceil((verts[c].max() - verts[c].min() + 1) /
-                            args.cellsize) for c in 'xy')
+                            cellsize) for c in 'xy')
     dtype = [('points', 'i4'), ('ground', 'f4'), ('canopy', 'f4')] + [
         (name, 'f8' if 'f' in dt else ('u4' if 'u' in dt else 'i4'))
         for name, dt in verts.dtype.descr if name not in 'xyz']
-    terrain = np.zeros(shape, dtype=dtype)
-    terrain['ground'] = np.inf
-    terrain['canopy'] = -np.inf
-    for idx, vert in zip(indices_for(verts), verts):
-        tx = terrain[idx['x index'], idx['y index']]
+    arr = np.zeros(shape, dtype=dtype)
+    arr['ground'] = np.inf
+    arr['canopy'] = -np.inf
+    for idx, vert in zip(indices_for(verts, cellsize), verts):
+        tx = arr[idx['x index'], idx['y index']]
         tx['points'] += 1
         z = vert['z']
         if z < tx['ground']:
@@ -41,29 +41,30 @@ def terrain(verts):
             tx['canopy'] = z
         for n in other_names:
             tx[n] += vert[n]
-    return terrain
+    return arr
 
 
-def indices_for(verts):
+def indices_for(verts, cellsize):
     """Return index array for the given verticies."""
     # XY->idx conversion is done with array operations for speed
     indicies = np.zeros((verts.size,),
                         dtype=[('x index', 'u2'), ('y index', 'u2')])
-    indicies['x index'] = (verts['x'] - verts['x'].min()) // args.cellsize
-    indicies['y index'] = (verts['y'] - verts['y'].min()) // args.cellsize
+    indicies['x index'] = (verts['x'] - verts['x'].min()) // cellsize
+    indicies['y index'] = (verts['y'] - verts['y'].min()) // cellsize
     return indicies
 
 
-def filter_ply(geoply):
+def filter_ply(geoply, cellsize, grassdepth):
     """Filter undesirable points out of the geoply."""
     # TODO:  filter on polygon boundary (GeoJSON) by marking terrain
-    if args.grassdepth <= 0:
+    if grassdepth <= 0:
         return geoply
     verts = geoply['vertex'].data
-    ground = np.array([terrain(verts)[idx['x index'], idx['y index']]['ground']
-                       for idx in indices_for(verts)])
+    ground = np.array(
+        [terrain(verts, cellsize)[idx['x index'], idx['y index']]['ground']
+         for idx in indices_for(verts, cellsize)])
     geoply['vertex'].data = verts[np.equal(verts['z'], ground) |
-                                  ((verts['z'] - ground) > args.grassdepth)]
+                                  ((verts['z'] - ground) > grassdepth)]
     return geoply
 
 
@@ -76,7 +77,7 @@ def add_clouds(args):
     out = GeoPly.from_geoplys(*in_) if len(in_) > 1 else in_[0]
     t2 = time.time()
     print('Concat took {:.3f} seconds'.format(t2-t1))
-    filter_ply(out).write(output_file)
+    filter_ply(out, args.cellsize, args.grassdepth).write(output_file)
     print('{:.3f} seconds for terrain and write'.format(time.time()-t2))
 
 
@@ -87,6 +88,7 @@ def get_args():
     type validation functions, to 'fail fast' and simplify other code.
     """
     def glob_arg_type(val):
+        """Custom type converter for argparse."""
         if not val.endswith('.ply'):
             raise argparse.ArgumentTypeError('glob pattern must end ".ply"')
         files = tuple(glob.glob(val))
@@ -95,6 +97,7 @@ def get_args():
         return files
 
     def dir_arg_type(val):
+        """Custom type converter for argparse."""
         if not os.path.exists(val):
             raise argparse.ArgumentTypeError('path does not exist')
         if not os.path.isdir(val):
@@ -135,5 +138,4 @@ def get_args():
 
 
 if __name__ == '__main__':
-    args = get_args()
-    add_clouds(args)
+    add_clouds(get_args())
