@@ -119,10 +119,11 @@ class GeoPly(plyfile.PlyData):
 
 
     @property
-    def iter_vertices(self):
-        """Iterate over the vertices of the pointcloud, as namedtuples."""
-        # TODO:  implement this
-        raise NotImplementedError
+    def vertices(self):
+        """Return a read-only view of the vertex data."""
+        vertices = np.ndarray.view(self['vertex'].data)
+        vertices.flags.writeable = False
+        return vertices
 
 
     @classmethod
@@ -143,7 +144,7 @@ class GeoPly(plyfile.PlyData):
 
         # flatten and deduplicate comments
         comments = [c for pf in geoplys for c in pf.comments]
-        comments = sorted(set(comments), key=lambda k: comments.index(k))
+        comments = sorted(set(comments), key=comments.index)
 
         # paste arrays into single memmap, handling UTM offsets
         using_memmap = any(isinstance(p['vertex'].data, np.memmap)
