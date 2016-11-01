@@ -24,6 +24,7 @@ and `pointclouds <http://phenocam.org.au/pointclouds>`_.
 # pylint:disable=unsubscriptable-object
 
 import argparse
+import collections
 import csv
 import math
 import os
@@ -31,7 +32,7 @@ from typing import MutableMapping, NamedTuple, Tuple, Set
 
 import utm  # type: ignore
 
-from . import pointcloudfile
+import geoply
 
 
 # User-defined types
@@ -43,8 +44,8 @@ def coords(pos):
     """Return a tuple of integer coordinates as keys for the dict/map.
     * pos can be a full point tuple, or just (x, y)
     * use floor() to avoid imprecise float issues"""
-    x = math.floor(pos.x / args.cellsize)
-    y = math.floor(pos.y / args.cellsize)
+    x = math.floor(pos['x'] / args.cellsize)
+    y = math.floor(pos['y'] / args.cellsize)
     return XY_Coord(x, y)
 
 
@@ -101,64 +102,54 @@ class MapObj:
         self.canopy = dict()
         self.density = dict()
         self.ground = dict()
-        self.colours = dict()
+        self.colours = collections.defaultdict(
+            lambda: collections.defaultdict(int))
         self.trees = dict()
 
-        self.header = pointcloudfile.parse_ply_header(
-            pointcloudfile.ply_header_text(input_file))
-        x, y, _ = pointcloudfile.offset_for(input_file)
-        self.utm = pointcloudfile.UTM_Coord(x, y, args.utmzone, args.north)
+        self.geoply = geoply.GeoPly.read(input_file)
 
         self.update_spatial()
         if colours:
             self.update_colours()
 
-    @property
-    def vertices(self):
-        """An iterator over the vertices in the pointcloud."""
-        yield from pointcloudfile.read(self.__file)
-
     def update_spatial(self):
         """Expand, correct, or maintain map with a new observed point."""
         # Fill out the spatial info in the file
-        for p in self.vertices:
+        for p in self.geoply.vertices:
             idx = coords(p)
             if self.density.get(idx) is None:
                 self.density[idx] = 1
-                self.canopy[idx] = p.z
-                self.ground[idx] = p.z
+                self.canopy[idx] = p['z']
+                self.ground[idx] = p['z']
                 continue
             self.density[idx] += 1
-            if self.ground[idx] > p.z:
-                self.ground[idx] = p.z
-            elif self.canopy[idx] < p.z:
-                self.canopy[idx] = p.z
+            if self.ground[idx] > p['z']:
+                self.ground[idx] = p['z']
+            elif self.canopy[idx] < p['z']:
+                self.canopy[idx] = p['z']
         self.trees = self._tree_components()
 
     def update_colours(self):
         """Expand, correct, or maintain map with a new observed point."""
         # We assume that vertex attributes not named "x", "y" or "z"
         # are colours, and thus accumulate a total to get the mean
-        for p in self.vertices:
+        for p in self.geoply.vertices:
             if self.is_ground(p):
                 continue
-            p_cols = {k: v for k, v in p._asdict().items() if k not in 'xyz'}
             idx = coords(p)
-            if idx not in self.colours:
-                self.colours[idx] = p_cols
-            else:
-                for k, v in p_cols.items():
-                    self.colours[idx][k] += v
+            for name, value in zip(p.dtype.names, p):
+                if name not in 'xyz':
+                    self.colours[idx][name] += value.item()
 
     def is_ground(self, point) -> bool:
         """Returns boolean whether the point is not classified as ground - ie
         True if within GROUND_DEPTH of the lowest point in the cell.
         If not lossy, also true for lowest ground point in a cell."""
-        return point[2] - self.ground[coords(point)] < args.grounddepth
+        return point['z'] - self.ground[coords(point)] < args.grounddepth
 
     def is_lowest(self, point) -> bool:
         """Returns boolean whether the point is lowest in that grid cell."""
-        return point[2] == self.ground[coords(point)]
+        return point['z'] == self.ground[coords(point)]
 
     def __len__(self) -> int:
         """Total observed points."""
@@ -187,9 +178,10 @@ class MapObj:
     def tree_data(self, keys: Set[XY_Coord]) -> dict:
         """Return a dictionary of data about the tree in the given keys."""
         # Calculate positional information
-        x = self.utm.x + args.cellsize * sum(k.x for k in keys) / len(keys)
-        y = self.utm.y + args.cellsize * sum(k.y for k in keys) / len(keys)
-        lat, lon = utm.to_latlon(x, y, self.utm.zone, northern=self.utm.north)
+        utmx, utmy, zone, northern = self.geoply.utm_coord
+        x = utmx + args.cellsize * sum(k.x for k in keys) / len(keys)
+        y = utmy + args.cellsize * sum(k.y for k in keys) / len(keys)
+        lat, lon = utm.to_latlon(x, y, zone, northern=northern)
         out = {
             'latitude': lat,
             'longitude': lon,
@@ -210,13 +202,14 @@ class MapObj:
 
     def all_trees(self):
         """Yield the characteristics of each tree."""
-        ids = list(set(self.trees.values()))
-        keys = {v: set() for v in ids}
+        # TODO: revisit; the data structures involved are unclear
+        keys = collections.defaultdict(set)
         for k, v in self.trees.items():
+            if v is not None:
+                keys[v].add(k)
+        for v in set(self.trees.values()):
             if v is None:
                 continue
-            keys[v].add(k)
-        for v in ids:
             data = self.tree_data(keys[v])
             if data['height'] > 1.5 * args.slicedepth:
                 # Filter trees by height
@@ -225,36 +218,45 @@ class MapObj:
     def save_sparse_cloud(self, new_fname, lowest=True, canopy=True):
         """Yield points for a sparse point cloud, eliminating ~3/4 of all
         points without affecting analysis."""
-        newpoints = (point for point in self.vertices
+        assert lowest or canopy, 'Must keep at least one of canopy or lowest'
+        newpoints = (point for point in self.geoply.vertices
                      if canopy and not self.is_ground(point) or
                      lowest and self.is_lowest(point))
-        pointcloudfile.write(newpoints, new_fname, self.header, self.utm)
+        output = geoply.GeoPly.from_iterable(newpoints, self.geoply.utm_coord)
+        output.write(new_fname)
         if lowest and canopy:
-            self.__file = new_fname
+            self.geoply = output
 
     def save_individual_trees(self):
         """Save single trees to files."""
+        # Validate the directory to be written to
         if not args.savetrees:
+            print('ERROR: cannot save trees to nonexistent path')
             return
         if os.path.isfile(args.savetrees):
             raise IOError('Output dir for trees is already a file')
         if not os.path.isdir(args.savetrees):
             os.makedirs(args.savetrees)
-        # Maps tree ID numbers to a incremental writer for that tree
-        tree_to_file = {tree_ID: pointcloudfile.IncrementalWriter(
-            os.path.join(args.savetrees, 'tree_{}.ply'.format(tree_ID)),
-            self.header, self.utm) for tree_ID in set(self.trees.values())}
-        # For non-ground, find the appropriate writer and call with the point
-        for point in self.vertices:
-            val = self.trees.get(coords(point))
-            if val is not None:
-                tree_to_file[val](point)
+        # Group points into dict of ID number to list of points
+        # This is relatively memory-intensive.
+        tree_clouds = collections.defaultdict(list)
+        for point in self.geoply.vertices:
+            tree = self.trees.get(coords(point))
+            if tree is not None:
+                tree_clouds[tree].append(point)
+        # Write them to disk
+        for tree, points in tree_clouds.items():
+            out = geoply.GeoPly.from_iterable(points, self.geoply.utm_coord)
+            fname = 'tree_{}.ply'.format(tree)
+            out.write(os.path.join(args.savetrees, fname))
+
 
     def stream_analysis(self, out: str) -> None:
         """Saves the list of trees with attributes to the file 'out'."""
         header = ('latitude', 'longitude', 'UTM_X', 'UTM_Y', 'UTM_zone',
                   'height', 'area', 'base_altitude', 'point_count') + tuple(
-                      a for a in self.header.names if a not in 'xyz')
+                      a for a in self.geoply.vertices.dtype.names
+                      if a not in 'xyz')
         with open(out, 'w', newline='') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=header)
             writer.writeheader()

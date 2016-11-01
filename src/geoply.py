@@ -4,6 +4,7 @@ based on the plyfile module.
 """
 
 import collections
+import itertools
 import json
 import tempfile
 import warnings
@@ -23,12 +24,11 @@ def get_tmpfile():
 
 
 class GeoPly(plyfile.PlyData):
-    """A pointcloud, with the UTM georeference for it's origin coordinates.
+    """A pointcloud, with the UTM georeference for the origin coordinate.
 
     Spatial units are meters east (X) and north (Y) of the origin.
-    Pointcloud data typically hsa a substantial XY offset from the UTM
-    origin point, which is retained due to the precision limits of 32-bit
-    floats.  Z-offsets are
+    Pointcloud data typically has a substantial XY offset from the UTM
+    origin, which is retained due to the precision limits of 32-bit floats.
     """
     # Marker for special UTM coord comments
     _COORD_MARKER = 'UTM_COORD='
@@ -41,6 +41,9 @@ class GeoPly(plyfile.PlyData):
         self.utm_coord = utm_coord
         if not isinstance(self.utm_coord, UTM_COORD):
             raise ValueError('Must include the UTM coords of the local origin')
+        # Handle the more flexible argument types allowed here
+        if isinstance(elements, np.ndarray):
+            elements = [plyfile.PlyElement.describe(elements, 'vertex')]
         # Call parent __init__, avoiding mutable default arguments
         elements = elements or []
         comments = comments or []
@@ -48,7 +51,7 @@ class GeoPly(plyfile.PlyData):
         super().__init__(elements, text, byte_order, comments, obj_info)
         # Memmap if requested, or autodetecting and many vertices
         if memmap is None:
-            memmap = self['vertex'].data.size >= 10**5
+            memmap = self['vertex'].data.size >= 10**7
         if memmap and not isinstance(self['vertex'].data, np.memmap):
             mmap = np.memmap(get_tmpfile(), dtype=self['vertex'].data.dtype,
                              shape=self['vertex'].data.shape)
@@ -104,7 +107,10 @@ class GeoPly(plyfile.PlyData):
         else:
             # Try to find and apply the Pix4D offset, which may raise...
             z_offset, utm_coord = GeoPly._offset_from_pix4d(stream)
-            verts['z'] = verts['z'] + z_offset
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', FutureWarning)
+                # Numpy wories about writing to multiple columns here
+                verts['z'] += z_offset
 
         # Return as GeoPly instance with only vertex elements
         return GeoPly([verts], data.text, data.byte_order,
@@ -148,6 +154,26 @@ class GeoPly(plyfile.PlyData):
         return vertices
 
 
+    @staticmethod
+    def from_iterable(iterable, utm_coord, **kwargs):
+        """Create a GeoPly from an iterable of vertices and a UTM offset.
+        The iterable must contain numpy scalars with a consistent dtype.
+        """
+        it = iter(iterable)
+        first = next(it)
+        assert isinstance(first, np.void)
+        array = np.fromiter(itertools.chain([first], it), first.dtype)
+        return GeoPly(array, utm_coord=utm_coord, **kwargs)
+
+
+    @staticmethod
+    def from_array(array, utm_coord, **kwargs):
+        """Create a GeoPly from a Numpy array of vertices and a UTM offset."""
+        assert isinstance(array, np.ndarray)
+        assert all(dim in array.dtype.names for dim in 'xyz')
+        return GeoPly(array, utm_coord=utm_coord, **kwargs)
+
+
     @classmethod
     def from_geoplys(cls, *geoplys):
         """Create a new geoply by combining two or more GeoPly instances.
@@ -185,6 +211,5 @@ class GeoPly(plyfile.PlyData):
             start += arr.size
 
         # Load data back into the complete structure and return
-        return GeoPly([plyfile.PlyElement.describe(to_arr, 'vertex')],
-                      comments=comments, utm_coord=base.utm_coord)
+        return GeoPly(to_arr, comments=comments, utm_coord=base.utm_coord)
 
