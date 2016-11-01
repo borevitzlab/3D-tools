@@ -193,26 +193,26 @@ class MapObj:
             'base_altitude': sum(self.ground[k] for k in keys) / len(keys),
             'point_count': 0,
             }
+        colours = collections.defaultdict(list)
         for k in keys:
             out['height'] = max(out['height'], self.canopy[k] - self.ground[k])
             out['point_count'] += self.density[k]
             for colour, total in self.colours[k].items():
-                out[colour] = total / self.density[k]
+                colours[colour].append(total / self.density[k])
+        for name, values in colours.items():
+            out[name] = sum(values) / len(values)
         return out
 
     def all_trees(self):
         """Yield the characteristics of each tree."""
-        # TODO: revisit; the data structures involved are unclear
-        keys = collections.defaultdict(set)
-        for k, v in self.trees.items():
-            if v is not None:
-                keys[v].add(k)
-        for v in set(self.trees.values()):
-            if v is None:
-                continue
-            data = self.tree_data(keys[v])
+        # Group coord-keys by tree ID; pass each set of coords to tree_data()
+        tree_coords = collections.defaultdict(set)
+        for coord, tree_id in self.trees.items():
+            if tree_id is not None:
+                tree_coords[tree_id].add(coord)
+        for coord_group in tree_coords.values():
+            data = self.tree_data(coord_group)
             if data['height'] > 1.5 * args.slicedepth:
-                # Filter trees by height
                 yield data
 
     def save_sparse_cloud(self, new_fname, lowest=True, canopy=True):
