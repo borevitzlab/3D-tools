@@ -4,8 +4,9 @@ based on the plyfile module.
 """
 
 import collections
-import contextlib
+import json
 import tempfile
+import warnings
 
 import numpy as np
 import plyfile
@@ -29,10 +30,14 @@ class GeoPly(plyfile.PlyData):
     origin point, which is retained due to the precision limits of 32-bit
     floats.  Z-offsets are
     """
+    # Marker for special UTM coord comments
+    _COORD_MARKER = 'UTM_COORD='
 
+    #pylint:disable=too-many-arguments
     def __init__(self, elements=None, text=False, byte_order='=',
-                 comments=None, obj_info=None, *, utm_coord=None, memmap=True):
-        #
+                 comments=None, obj_info=None, *, utm_coord, memmap=None):
+        """Create a GeoPly instance.  utm_coord is a required keyword arg."""
+        # Validate utm_coord a little
         self.utm_coord = utm_coord
         if not isinstance(self.utm_coord, UTM_COORD):
             raise ValueError('Must include the UTM coords of the local origin')
@@ -41,7 +46,9 @@ class GeoPly(plyfile.PlyData):
         comments = comments or []
         obj_info = obj_info or []
         super().__init__(elements, text, byte_order, comments, obj_info)
-        # Use a memmap for vertex data by default
+        # Memmap if requested, or autodetecting and many vertices
+        if memmap is None:
+            memmap = self['vertex'].data.size >= 10**5
         if memmap and not isinstance(self['vertex'].data, np.memmap):
             mmap = np.memmap(get_tmpfile(), dtype=self['vertex'].data.dtype,
                              shape=self['vertex'].data.shape)
@@ -58,15 +65,13 @@ class GeoPly(plyfile.PlyData):
         - comments in the file header, if the pointcloud was created
           by this class.
         - the corresponding '_ply_offset.xyz' file, if the pointcloud was
-          created by Pix4D.
+          created by Pix4D.  In this case, the Z-offset is added to vertex
+          coordinates.
 
         Data cleaning consists of:
         - discarding non-"vertex" elements (if present)
-        -
-        Additionally:
-            - applies Pix4D altitude offset
-              (unlike XY, Z is small enougth that precision is not an issue)
-            - removes Meshlab cruft if present (comment, empty alpha channel)
+        - removing the marker comment if written by Meshlab, and if a uniform
+          alpha channel was added removing that too
         """
         data = plyfile.PlyData.read(stream)
         verts = data['vertex']
@@ -74,7 +79,7 @@ class GeoPly(plyfile.PlyData):
         # Remove meshlab cruft
         if 'VCGLIB generated' in data.comments:
             names = verts.data.dtype.names  # field names of each vertex
-            if 'alpha' in names and 1 == len(np.unique(verts['alpha'])):
+            if 'alpha' in names and len(np.unique(verts['alpha'])) == 1:
                 # properties of the PlyElement instance are manually updated
                 verts.properties = [p for p in verts.properties
                                     if p.name != 'alpha']
@@ -83,24 +88,23 @@ class GeoPly(plyfile.PlyData):
             data.comments.remove('VCGLIB generated')
 
         # Add UTM coordinates if known or discoverable
-        utm_coord = UTM_COORD(0, 0, 55, False)  # FIXME:  better defaults
-        if isinstance(stream, str):  # FIXME:  or Path???
-            with contextlib.suppress(Exception):
-                # First, let's try for a Pix4D-style offset file
-                with open(stream[:-4] + '_ply_offset.xyz') as f:
-                    x, y, z = tuple(
-                        float(n) for n in f.readline().strip().split(' '))
-                utm_coord = utm_coord._replace(easting=x, northing=y)
-                verts['z'] = verts['z'] + z
+        utm_coord = None
+        coords = []
         for c in data.comments:
-            if c.startswith('utm_'):
-                types = dict(zip(UTM_COORD._fields,
-                                 [float, float, int, lambda b: b == 'True']))
-                attr, val = c.replace('utm_', '').split()
-                setattr(utm_coord, attr, types[attr](val))
+            if c.startswith(GeoPly._COORD_MARKER):
                 data.comments.remove(c)
-        if not (utm_coord.easting and utm_coord.northing):
-            utm_coord = None
+                serialised = c.lstrip(GeoPly._COORD_MARKER)
+                coords.append(UTM_COORD(**json.loads(serialised)))
+        if coords:
+            utm_coord = coords[0]
+            if len(coords) > 1:
+                msg = RuntimeWarning('Found multiple coordinates in comments:'
+                                     '{}, using first...'.format(coords))
+                warnings.warn(msg)
+        else:
+            # Try to find and apply the Pix4D offset, which may raise...
+            z_offset, utm_coord = GeoPly._offset_from_pix4d(stream)
+            verts['z'] = verts['z'] + z_offset
 
         # Return as GeoPly instance with only vertex elements
         return GeoPly([verts], data.text, data.byte_order,
@@ -109,13 +113,31 @@ class GeoPly(plyfile.PlyData):
 
     def write(self, stream):
         """Write to a file, serialising utm_coord as a special comment."""
-        if self.utm_coord is not None:
-            if any(c.startswith('utm_') for c in self.comments):
-                # TODO:  log warning
-                self.comments = [c for c in self.comments if c[:4] != 'utm_']
-            for attr, val in zip(UTM_COORD._fields, self.utm_coord):
-                self.comments.append('utm_{0} {1}'.format(attr, val))
+        assert not any(c.startswith(self._COORD_MARKER) for c in self.comments)
+        # Serialise as JSON dict following the marker string
+        serialised = self._COORD_MARKER + json.dumps(self.utm_coord._asdict())
+        # Insert, write, pop - keeps comments in correct state
+        self.comments.insert(0, serialised)
         super().write(stream)
+        self.comments.pop(0)
+
+
+    @staticmethod
+    def _offset_from_pix4d(ply_filename, utm_zone=55,
+                           in_northern_hemisphere=False):
+        """Return a (offset_z, UTM coord) for a .ply file from the
+        corresponding Pix4D offset file and provided zone.
+        Raises FileNotFoundError if the offset file is invalid or nonexistent.
+        """
+        assert ply_filename.endswith('.ply')
+        offset_file = ply_filename[:-4] + '_ply_offset.xyz'
+        try:
+            with open(offset_file) as f:
+                line = f.readline().strip()
+            x, y, z = (float(n) for n in line.split(' '))
+        except Exception:
+            raise FileNotFoundError
+        return z, UTM_COORD(x, y, utm_zone, in_northern_hemisphere)
 
 
     @property
