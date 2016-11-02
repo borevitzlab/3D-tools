@@ -40,13 +40,12 @@ XY_Coord = NamedTuple('XY_Coord', [('x', int), ('y', int)])
 Coord_Labels = MutableMapping[XY_Coord, int]
 
 
-def coords(pos):
+def coords(pos, cellsize):
     """Return a tuple of integer coordinates as keys for the dict/map.
     * pos can be a full point tuple, or just (x, y)
     * use floor() to avoid imprecise float issues"""
-    x = math.floor(pos['x'] / args.cellsize)
-    y = math.floor(pos['y'] / args.cellsize)
-    return XY_Coord(x, y)
+    return XY_Coord(
+        math.floor(pos['x'] / cellsize), math.floor(pos['y'] / cellsize))
 
 
 def neighbors(key: XY_Coord) -> Tuple[XY_Coord, ...]:
@@ -86,17 +85,14 @@ class MapObj:
     cells.  Hides data structure and accessed through coordinates."""
     # pylint:disable=too-many-instance-attributes
 
-    def __init__(self, input_file, *, colours=True):
+    def __init__(self, input_file, *, args, colours=True):
         """
         Args:
             input_file (path): the ``.ply`` file to process.  If dealing with
                 Pix4D outputs, ``*_part_1.ply``.
+            args (namespace): parsed command-line arguments.
             colours (bool): whether to read colours from the file.  Set to
                 False for eg. LIDAR data where mean colour is not useful.
-            prev_csv (path): path to a csv file which associates a name
-                with coordinates, to correctly name detected trees.
-            zone (int): the UTM zone of the site.
-            south (bool): if the site is in the southern hemisphere.
         """
         self.__file = input_file
         self.canopy = dict()
@@ -108,6 +104,11 @@ class MapObj:
 
         self.geoply = geoply.GeoPly.read(input_file)
 
+        self.cellsize = args.cellsize
+        self.slicedepth = args.slicedepth
+        self.grounddepth = args.grassdepth
+        self.joinedcells = args.joinedcells
+
         self.update_spatial()
         if colours:
             self.update_colours()
@@ -116,7 +117,7 @@ class MapObj:
         """Expand, correct, or maintain map with a new observed point."""
         # Fill out the spatial info in the file
         for p in self.geoply.vertices:
-            idx = coords(p)
+            idx = coords(p, self.cellsize)
             if self.density.get(idx) is None:
                 self.density[idx] = 1
                 self.canopy[idx] = p['z']
@@ -136,7 +137,7 @@ class MapObj:
         for p in self.geoply.vertices:
             if self.is_ground(p):
                 continue
-            idx = coords(p)
+            idx = coords(p, self.cellsize)
             for name, value in zip(p.dtype.names, p):
                 if name not in 'xyz':
                     self.colours[idx][name] += value.item()
@@ -145,11 +146,12 @@ class MapObj:
         """Returns boolean whether the point is not classified as ground - ie
         True if within GROUND_DEPTH of the lowest point in the cell.
         If not lossy, also true for lowest ground point in a cell."""
-        return point['z'] - self.ground[coords(point)] < args.grounddepth
+        return point['z'] - self.ground[coords(point, self.cellsize)] \
+            < self.grounddepth
 
     def is_lowest(self, point) -> bool:
         """Returns boolean whether the point is lowest in that grid cell."""
-        return point['z'] == self.ground[coords(point)]
+        return point['z'] == self.ground[coords(point, self.cellsize)]
 
     def __len__(self) -> int:
         """Total observed points."""
@@ -161,9 +163,9 @@ class MapObj:
         # Set up a boolean array of larger keys to search
         key_scale_record = {}  # type: Dict[XY_Coord, Set[XY_Coord]]
         for key in self.density:
-            if self.canopy[key] - self.ground[key] > args.slicedepth:
-                cc_key = XY_Coord(int(math.floor(key.x / args.joinedcells)),
-                                  int(math.floor(key.y / args.joinedcells)))
+            if self.canopy[key] - self.ground[key] > self.slicedepth:
+                cc_key = XY_Coord(int(math.floor(key.x / self.joinedcells)),
+                                  int(math.floor(key.y / self.joinedcells)))
                 if cc_key not in key_scale_record:
                     key_scale_record[cc_key] = {key}
                 else:
@@ -212,7 +214,7 @@ class MapObj:
                 tree_coords[tree_id].add(coord)
         for coord_group in tree_coords.values():
             data = self.tree_data(coord_group)
-            if data['height'] > 1.5 * args.slicedepth:
+            if data['height'] > 1.5 * self.slicedepth:
                 yield data
 
     def save_sparse_cloud(self, new_fname, lowest=True, canopy=True):
@@ -227,28 +229,28 @@ class MapObj:
         if lowest and canopy:
             self.geoply = output
 
-    def save_individual_trees(self):
+    def save_individual_trees(self, trees_dir):
         """Save single trees to files."""
         # Validate the directory to be written to
-        if not args.savetrees:
+        if not trees_dir:
             print('ERROR: cannot save trees to nonexistent path')
             return
-        if os.path.isfile(args.savetrees):
+        if os.path.isfile(trees_dir):
             raise IOError('Output dir for trees is already a file')
-        if not os.path.isdir(args.savetrees):
-            os.makedirs(args.savetrees)
+        if not os.path.isdir(trees_dir):
+            os.makedirs(trees_dir)
         # Group points into dict of ID number to list of points
         # This is relatively memory-intensive.
         tree_clouds = collections.defaultdict(list)
         for point in self.geoply.vertices:
-            tree = self.trees.get(coords(point))
+            tree = self.trees.get(coords(point, self.cellsize))
             if tree is not None:
                 tree_clouds[tree].append(point)
         # Write them to disk
         for tree, points in tree_clouds.items():
             out = geoply.GeoPly.from_iterable(points, self.geoply.utm_coord)
             fname = 'tree_{}.ply'.format(tree)
-            out.write(os.path.join(args.savetrees, fname))
+            out.write(os.path.join(trees_dir, fname))
 
 
     def stream_analysis(self, out: str) -> None:
@@ -266,40 +268,63 @@ class MapObj:
 
 def get_args():
     """Handle command-line arguments, including default values."""
+    df = ' default=%(default)s'
     parser = argparse.ArgumentParser(
-        description=('Takes a .ply forest  point cloud; outputs a sparse point'
-                     'cloud and a .csv file of attributes for each tree.'))
+        description=__doc__.strip(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='Contact:  zac.hatfield.dodds@anu.edu.au',
+        )
+
+    io_g = parser.add_argument_group('Input/Output Args')
+    io_g.add_argument(
+        'file', help='the file or files to process, ending ".ply"')
+    io_g.add_argument(
+        '--out', default='.', help='directory for output files')
     parser.add_argument(
-        'file', help='name of the file to process', type=str)
-    parser.add_argument(
-        'out', default='.', nargs='?', type=str,
-        help='directory for output files (optional)')
-    parser.add_argument(
-        '--savetrees', default='', nargs='?', type=str,
-        help='where to save individual trees (default "", not saved)')
-    parser.add_argument(  # analysis scale
-        '--cellsize', default=0.1, nargs='?', type=float,
-        help='grid scale; optimal at ~10x point spacing')
-    parser.add_argument(  # georeferenced location
-        '--utmzone', default=55, type=int,
-        help='the UTM coordinate zone for georeferencing')
-    parser.add_argument(  # georeferenced location
-        '--north', action='store_true',
-        help='set if in the northern hemisphere')
-    parser.add_argument(  # feature extraction
-        '--joinedcells', default=3, type=float,
+        '--savetrees', metavar='DIR',
+        help='where to save individual trees (default: not saved)')
+
+    filt_g = parser.add_argument_group('Filtering Args')
+    filt_g.add_argument(
+        '--cellsize', default=0.1, type=float,
+        help=('edge length of the analysis pixels in meters.  Around 10 times'
+              ' point spacing seems to give good results.' + df))
+    filt_g.add_argument(
+        '--grassdepth', metavar='DEPTH', default=0.2, type=float,
+        help=('filter out points less than this height in meters above lowest'
+              ' point per cell.  n <= 0 disables this filter.' + df))
+    filt_g.add_argument(
+        '--joinedcells', metavar='DEPTH', default=3, type=float,
         help='use cells X times larger to detect gaps between trees')
-    parser.add_argument(  # feature extraction
+    filt_g.add_argument(
         '--slicedepth', default=0.6, type=float,
         help='slice depth for canopy area and feature extraction')
-    parser.add_argument(  # feature classification
-        '--grounddepth', default=0.2, type=float,
-        help='depth to omit from sparse point cloud')
-    return parser.parse_args()
+
+    geo_g = parser.add_argument_group('Geolocation Args')
+    geo_g.add_argument(
+        '--utmzone', default=55, type=int, choices=range(1, 61),
+        metavar='[1..60]', help='the UTM coordinate zone of the data,' + df)
+    ns_g = geo_g.add_mutually_exclusive_group()
+    ns_g.add_argument('--northern', action='store_true',
+                      help='for data in the northern hemisphere,' + df)
+    ns_g.add_argument('--southern', action='store_true', default=True,
+                      help='for data in the southern hemisphere,' + df)
+
+    args = parser.parse_args()
+
+    if not os.path.isfile(args.file):
+        parser.error('Input file not found, ' + args.file)
+    if not args.file.endswith('.ply'):
+        parser.error('Input file requires ".ply" extension')
+    if not os.path.isdir(args.out):
+        parser.error('Output path does not exist: ' + args.out)
+
+    return args
 
 
-def main_processing():
+def main():
     """Logic on which functions to call, and efficient order."""
+    args = get_args()
     print('Reading from "{}" ...'.format(args.file))
     sparse = os.path.join(args.out, os.path.basename(args.file))
     if not args.file.endswith('_sparse.ply'):
@@ -307,11 +332,11 @@ def main_processing():
             args.out, os.path.basename(args.file)[:-4] + '_sparse.ply')
     sparse = sparse.replace('_part_1', '')
     if os.path.isfile(sparse):
-        attr_map = MapObj(sparse)
+        attr_map = MapObj(sparse, args=args)
         print('Read {} points into {} cells'.format(
             len(attr_map), len(attr_map.canopy)))
     else:
-        attr_map = MapObj(args.file, colours=False)
+        attr_map = MapObj(args.file, args=args, colours=False)
         print('Read {} points into {} cells, writing "{}" ...'.format(
             len(attr_map), len(attr_map.canopy), sparse))
         attr_map.save_sparse_cloud(sparse)
@@ -322,21 +347,9 @@ def main_processing():
     attr_map.stream_analysis(table)
     if args.savetrees:
         print('Saving individual trees...')
-        attr_map.save_individual_trees()
+        attr_map.save_individual_trees(args.savetrees)
     print('Done.')
 
 
-def main():
-    """Interface to call from outside the package."""
-    # pylint:disable=global-statement
-    global args
-    args = get_args()
-    if not os.path.isfile(args.file):
-        raise IOError('Input file not found, ' + args.file)
-    main_processing()
-
 if __name__ == '__main__':
-    # Call to get_args is duplicated to work in static analysis, from
-    # command line, and when installed as package (calls main directly)
-    args = get_args()
     main()
