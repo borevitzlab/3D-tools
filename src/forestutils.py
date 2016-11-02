@@ -16,10 +16,6 @@ Outputs (most are optional):
 Extensive use of mutable coordinate-property mappings and streamed input
 ensure that even files to large to load in memory can be processed.  In extreme
 cases, the resolution can be decreased to trade accuracy for memory.
-
-Example outputs (from an older version):
-`a map <https://www.google.com/maps/d/viewer?mid=z1pH7HaTWL9Q.kzQflQGYVRIU>`_,
-and `pointclouds <http://phenocam.org.au/pointclouds>`_.
 """
 # pylint:disable=unsubscriptable-object
 
@@ -28,6 +24,7 @@ import collections
 import csv
 import math
 import os
+import statistics
 from typing import MutableMapping, NamedTuple, Tuple, Set
 
 import utm  # type: ignore
@@ -94,7 +91,6 @@ class MapObj:
             colours (bool): whether to read colours from the file.  Set to
                 False for eg. LIDAR data where mean colour is not useful.
         """
-        self.__file = input_file
         self.canopy = dict()
         self.density = dict()
         self.ground = dict()
@@ -113,6 +109,7 @@ class MapObj:
         if colours:
             self.update_colours()
 
+
     def update_spatial(self):
         """Expand, correct, or maintain map with a new observed point."""
         # Fill out the spatial info in the file
@@ -130,6 +127,7 @@ class MapObj:
                 self.canopy[idx] = p['z']
         self.trees = self._tree_components()
 
+
     def update_colours(self):
         """Expand, correct, or maintain map with a new observed point."""
         # We assume that vertex attributes not named "x", "y" or "z"
@@ -142,6 +140,7 @@ class MapObj:
                 if name not in 'xyz':
                     self.colours[idx][name] += value.item()
 
+
     def is_ground(self, point) -> bool:
         """Returns boolean whether the point is not classified as ground - ie
         True if within GROUND_DEPTH of the lowest point in the cell.
@@ -149,13 +148,16 @@ class MapObj:
         return point['z'] - self.ground[coords(point, self.cellsize)] \
             < self.grounddepth
 
+
     def is_lowest(self, point) -> bool:
         """Returns boolean whether the point is lowest in that grid cell."""
         return point['z'] == self.ground[coords(point, self.cellsize)]
 
+
     def __len__(self) -> int:
         """Total observed points."""
         return sum(self.density.values())
+
 
     def _tree_components(self) -> Coord_Labels:
         """Returns a dict where keys refer to connected components.
@@ -177,33 +179,28 @@ class MapObj:
         # Copy labels to grid of original scale
         return {s: trees[k] for k, v in key_scale_record.items() for s in v}
 
+
     def tree_data(self, keys: Set[XY_Coord]) -> dict:
         """Return a dictionary of data about the tree in the given keys."""
-        # Calculate positional information
+        assert keys
         utmx, utmy, zone, northern = self.geoply.utm_coord
-        x = utmx + args.cellsize * sum(k.x for k in keys) / len(keys)
-        y = utmy + args.cellsize * sum(k.y for k in keys) / len(keys)
+        x = utmx + self.cellsize * sum(k.x for k in keys) / len(keys)
+        y = utmy + self.cellsize * sum(k.y for k in keys) / len(keys)
         lat, lon = utm.to_latlon(x, y, zone, northern=northern)
-        out = {
-            'latitude': lat,
-            'longitude': lon,
-            'UTM_X': x,
-            'UTM_Y': y,
-            'UTM_zone': args.utmzone,
-            'height': 0,
-            'area': len(keys) * args.cellsize**2,
-            'base_altitude': sum(self.ground[k] for k in keys) / len(keys),
-            'point_count': 0,
-            }
-        colours = collections.defaultdict(list)
-        for k in keys:
-            out['height'] = max(out['height'], self.canopy[k] - self.ground[k])
-            out['point_count'] += self.density[k]
-            for colour, total in self.colours[k].items():
-                colours[colour].append(total / self.density[k])
-        for name, values in colours.items():
-            out[name] = sum(values) / len(values)
-        return out
+        return collections.OrderedDict((
+            ('latitude', lat),
+            ('longitude', lon),
+            ('UTM_easting', x),
+            ('UTM_northing', y),
+            ('height', max(self.canopy[k] - self.ground[k] for k in keys)),
+            ('area', len(keys) * self.cellsize**2),
+            ('base_altitude', sum(self.ground[k] for k in keys) / len(keys)),
+            ('point_count', sum(self.density[k] for k in keys)),
+            *((band, statistics.mean(
+                [self.colours[k][band] / self.density[k] for k in keys]))
+              for band in self.colours[next(iter(keys))].keys()),
+            ))
+
 
     def all_trees(self):
         """Yield the characteristics of each tree."""
@@ -217,6 +214,7 @@ class MapObj:
             if data['height'] > 1.5 * self.slicedepth:
                 yield data
 
+
     def save_sparse_cloud(self, new_fname, lowest=True, canopy=True):
         """Yield points for a sparse point cloud, eliminating ~3/4 of all
         points without affecting analysis."""
@@ -228,6 +226,7 @@ class MapObj:
         output.write(new_fname)
         if lowest and canopy:
             self.geoply = output
+
 
     def save_individual_trees(self, trees_dir):
         """Save single trees to files."""
@@ -255,15 +254,11 @@ class MapObj:
 
     def stream_analysis(self, out: str) -> None:
         """Saves the list of trees with attributes to the file 'out'."""
-        header = ('latitude', 'longitude', 'UTM_X', 'UTM_Y', 'UTM_zone',
-                  'height', 'area', 'base_altitude', 'point_count') + tuple(
-                      a for a in self.geoply.vertices.dtype.names
-                      if a not in 'xyz')
+        rows = list(self.all_trees())
         with open(out, 'w', newline='') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=header)
+            writer = csv.DictWriter(csvfile, fieldnames=rows[0].keys())
             writer.writeheader()
-            for data in self.all_trees():
-                writer.writerow(data)
+            writer.writerows(rows)
 
 
 def get_args():
