@@ -27,6 +27,7 @@ import os
 import statistics
 from typing import MutableMapping, NamedTuple, Tuple, Set
 
+import numpy as np
 import utm  # type: ignore
 
 try:
@@ -110,7 +111,7 @@ class ForestMap:
                     self.colors[idx][name] += value.item()
             if self.ground[idx] > point['z']:
                 self.ground[idx] = point['z']
-            elif self.canopy[idx] < point['z']:
+            if self.canopy[idx] < point['z']:
                 self.canopy[idx] = point['z']
             self.density[idx] += 1
 
@@ -133,14 +134,25 @@ class ForestMap:
     @property
     def as_array(self):
         """Return the map as a 2D structured array, offset, and cellsize."""
-        keys = self.density.keys()
-        offset = XY_Coord(min(k.x for k in self.canopy),
-                          min(k.y for k in self.canopy))
-        keys = {k._replace(x=k.x-offset.x, y=k.y-offset.y) for k in keys}
-        shape = max(k.x for k in keys), max(k.y for k in keys)
-        raise NotImplementedError('TODO:  make 2D structured array')
+        # Adjust keys to zero and find output array shape
+        keys = np.array(list(self.density))
+        offset = XY_Coord._make(keys.min(axis=0))
+        shape = tuple((keys - offset).max(axis=0) + 1)
+        dtype = np.dtype([(name, 'f8') for name in ['ground', 'canopy'] +
+                          sorted(next(iter(self.colors.values())))])
+        map_array = np.empty(shape, dtype)
+        map_array[:] = np.nan
+        map_array['ground'] = np.inf
+        map_array['canopy'] = -np.inf
+        for key in self.density:
+            arr_key = XY_Coord(key.x-offset.x, key.y-offset.y)
+            map_array['ground'][arr_key] = self.ground[key]
+            map_array[arr_key]['canopy'] = self.canopy[key]
+            for name in self.colors[key]:
+                map_array[arr_key][name] = \
+                    self.colors[key][name] / self.density[key]
         return namedtuple('Map', 'array offset cellsize')(
-            None, offset, self.density._cellsize)
+            map_array, offset, self.density._cellsize)
 
 
 class MapObj:
