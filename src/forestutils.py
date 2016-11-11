@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#! python3
 """Tools for analysing forest point clouds.
 
 Inputs: a coloured pointcloud in ``.ply`` format (XYZRGB vertices), which
@@ -20,7 +20,7 @@ cases, the resolution can be decreased to trade accuracy for memory.
 # pylint:disable=unsubscriptable-object
 
 import argparse
-import collections
+from collections import defaultdict, namedtuple, OrderedDict
 import csv
 import math
 import os
@@ -29,20 +29,15 @@ from typing import MutableMapping, NamedTuple, Tuple, Set
 
 import utm  # type: ignore
 
-import geoply
+try:
+    import geoply
+except ImportError:
+    from . import geoply
 
 
 # User-defined types
 XY_Coord = NamedTuple('XY_Coord', [('x', int), ('y', int)])
 Coord_Labels = MutableMapping[XY_Coord, int]
-
-
-def coords(pos, cellsize):
-    """Return a tuple of integer coordinates as keys for the dict/map.
-    * pos can be a full point tuple, or just (x, y)
-    * use floor() to avoid imprecise float issues"""
-    return XY_Coord(
-        math.floor(pos['x'] / cellsize), math.floor(pos['y'] / cellsize))
 
 
 def neighbors(key: XY_Coord) -> Tuple[XY_Coord, ...]:
@@ -77,12 +72,83 @@ def connected_components(input_dict: Coord_Labels) -> None:
             continue
 
 
+class MapDict(defaultdict):
+    """Calling this defaultdict returns the grid cell for the point"""
+    def __init__(self, *args, cellsize, **kwargs):
+        self._cellsize = cellsize
+        super().__init__(*args, **kwargs)
+
+    def __call__(self, pos=None):
+        try:
+            key = self.to_key(pos)
+        except KeyError:
+            if pos is None:
+                return self
+            raise
+        return self[key]
+
+    def to_key(self, pos):
+        """Convert a vertex to the corresponding hashable key"""
+        return XY_Coord(math.floor(pos['x'] / self._cellsize),
+                        math.floor(pos['y'] / self._cellsize))
+
+
+class ForestMap:
+    """Easy-to-use data storage; basically a defaultdict collection."""
+
+    def __init__(self, cellsize):
+        self.density = MapDict(int, cellsize=cellsize)
+        self.ground = MapDict(lambda: math.inf, cellsize=cellsize)
+        self.canopy = MapDict(lambda: -math.inf, cellsize=cellsize)
+        self.colors = MapDict(lambda: defaultdict(int), cellsize=cellsize)
+
+    def add_vertices(self, vertices):
+        for point in vertices:
+            idx = self.density.to_key(point)
+            for name, value in zip(point.dtype.names, point):
+                if name not in 'xyz':
+                    self.colors[idx][name] += value.item()
+            if self.ground[idx] > point['z']:
+                self.ground[idx] = point['z']
+            elif self.canopy[idx] < point['z']:
+                self.canopy[idx] = point['z']
+            self.density[idx] += 1
+
+    @classmethod
+    def from_parts(cls, *forestmaps):
+        assert len(forestmaps) >= 2
+        assert all(isinstance(m, cls) for m in forestmaps)
+        self, *others = forestmaps
+        for other in forestmaps:
+            for key in other.density:
+                for name in self.colors[key]:
+                    self.colors[key][name] += other.colors[key][name]
+                if self.canopy[key] < other.canopy[key]:
+                    self.canopy[key] == other.canopy[key]
+                if self.ground[key] < other.ground[key]:
+                    self.canopy[key] == other.ground[key]
+                self.density[key] += other.density[key]
+        return self
+
+    @property
+    def as_array(self):
+        """Return the map as a 2D structured array, offset, and cellsize."""
+        keys = self.density.keys()
+        offset = XY_Coord(min(k.x for k in self.canopy),
+                          min(k.y for k in self.canopy))
+        keys = {k._replace(x=k.x-offset.x, y=k.y-offset.y) for k in keys}
+        shape = max(k.x for k in keys), max(k.y for k in keys)
+        raise NotImplementedError('TODO:  make 2D structured array')
+        return namedtuple('Map', 'array offset cellsize')(
+            None, offset, self.density._cellsize)
+
+
 class MapObj:
     """Stores a maximum and minimum height map of the cloud, in GRID_SIZE
     cells.  Hides data structure and accessed through coordinates."""
     # pylint:disable=too-many-instance-attributes
 
-    def __init__(self, input_file, *, args, colours=True):
+    def __init__(self, input_file, *, args):
         """
         Args:
             input_file (path): the ``.ply`` file to process.  If dealing with
@@ -91,72 +157,18 @@ class MapObj:
             colours (bool): whether to read colours from the file.  Set to
                 False for eg. LIDAR data where mean colour is not useful.
         """
-        self.canopy = dict()
-        self.density = dict()
-        self.ground = dict()
-        self.colours = collections.defaultdict(
-            lambda: collections.defaultdict(int))
-        self.trees = dict()
-
-        self.geoply = geoply.GeoPly.read(input_file)
-
         self.cellsize = args.cellsize
+        self.geoply = geoply.GeoPly.read(input_file)
+        self.map = ForestMap(self.geoply.vertices, self.cellsize)
+
         self.slicedepth = args.slicedepth
         self.grounddepth = args.grassdepth
         self.joinedcells = args.joinedcells
 
-        self.update_spatial()
-        if colours:
-            self.update_colours()
-
-
-    def update_spatial(self):
-        """Expand, correct, or maintain map with a new observed point."""
-        # Fill out the spatial info in the file
-        for p in self.geoply.vertices:
-            idx = coords(p, self.cellsize)
-            if self.density.get(idx) is None:
-                self.density[idx] = 1
-                self.canopy[idx] = p['z']
-                self.ground[idx] = p['z']
-                continue
-            self.density[idx] += 1
-            if self.ground[idx] > p['z']:
-                self.ground[idx] = p['z']
-            elif self.canopy[idx] < p['z']:
-                self.canopy[idx] = p['z']
-        self.trees = self._tree_components()
-
-
-    def update_colours(self):
-        """Expand, correct, or maintain map with a new observed point."""
-        # We assume that vertex attributes not named "x", "y" or "z"
-        # are colours, and thus accumulate a total to get the mean
-        for p in self.geoply.vertices:
-            if self.is_ground(p):
-                continue
-            idx = coords(p, self.cellsize)
-            for name, value in zip(p.dtype.names, p):
-                if name not in 'xyz':
-                    self.colours[idx][name] += value.item()
-
-
-    def is_ground(self, point) -> bool:
-        """Returns boolean whether the point is not classified as ground - ie
-        True if within GROUND_DEPTH of the lowest point in the cell.
-        If not lossy, also true for lowest ground point in a cell."""
-        return point['z'] - self.ground[coords(point, self.cellsize)] \
-            < self.grounddepth
-
-
-    def is_lowest(self, point) -> bool:
-        """Returns boolean whether the point is lowest in that grid cell."""
-        return point['z'] == self.ground[coords(point, self.cellsize)]
-
 
     def __len__(self) -> int:
         """Total observed points."""
-        return sum(self.density.values())
+        return sum(self.map.density.values())
 
 
     def _tree_components(self) -> Coord_Labels:
@@ -164,8 +176,8 @@ class MapObj:
         NB: Not all keys in other dicts exist in this output."""
         # Set up a boolean array of larger keys to search
         key_scale_record = {}  # type: Dict[XY_Coord, Set[XY_Coord]]
-        for key in self.density:
-            if self.canopy[key] - self.ground[key] > self.slicedepth:
+        for key in self.map.canopy:
+            if self.map.canopy[key] - self.map.ground[key] > self.slicedepth:
                 cc_key = XY_Coord(int(math.floor(key.x / self.joinedcells)),
                                   int(math.floor(key.y / self.joinedcells)))
                 if cc_key not in key_scale_record:
@@ -177,7 +189,9 @@ class MapObj:
         trees = {k: i for i, k in enumerate(tuple(key_scale_record))}
         connected_components(trees)
         # Copy labels to grid of original scale
-        return {s: trees[k] for k, v in key_scale_record.items() for s in v}
+        return MapDict(None, (
+            (s, trees[k]) for k, v in key_scale_record.items() for s in v),
+                       cellsize=self.cellsize)
 
 
     def tree_data(self, keys: Set[XY_Coord]) -> dict:
@@ -187,26 +201,29 @@ class MapObj:
         x = utmx + self.cellsize * sum(k.x for k in keys) / len(keys)
         y = utmy + self.cellsize * sum(k.y for k in keys) / len(keys)
         lat, lon = utm.to_latlon(x, y, zone, northern=northern)
-        return collections.OrderedDict((
+        return OrderedDict((
             ('latitude', lat),
             ('longitude', lon),
             ('UTM_easting', x),
             ('UTM_northing', y),
-            ('height', max(self.canopy[k] - self.ground[k] for k in keys)),
+            ('height', max(self.map.canopy[k] - self.map.ground[k]
+                           for k in keys)),
             ('area', len(keys) * self.cellsize**2),
-            ('base_altitude', sum(self.ground[k] for k in keys) / len(keys)),
-            ('point_count', sum(self.density[k] for k in keys)),
+            ('base_altitude', sum(self.map.ground[k]
+                                  for k in keys) / len(keys)),
+            ('point_count', sum(self.map.density[k] for k in keys)),
             *((band, statistics.mean(
-                [self.colours[k][band] / self.density[k] for k in keys]))
-              for band in self.colours[next(iter(keys))].keys()),
+                [self.map.colors[k][band] / self.map.density[k]
+                 for k in keys]))
+              for band in self.map.colors[next(iter(keys))].keys()),
             ))
 
 
     def all_trees(self):
         """Yield the characteristics of each tree."""
         # Group coord-keys by tree ID; pass each set of coords to tree_data()
-        tree_coords = collections.defaultdict(set)
-        for coord, tree_id in self.trees.items():
+        tree_coords = defaultdict(set)
+        for coord, tree_id in self._tree_components().items():
             if tree_id is not None:
                 tree_coords[tree_id].add(coord)
         for coord_group in tree_coords.values():
@@ -219,9 +236,10 @@ class MapObj:
         """Yield points for a sparse point cloud, eliminating ~3/4 of all
         points without affecting analysis."""
         assert lowest or canopy, 'Must keep at least one of canopy or lowest'
-        newpoints = (point for point in self.geoply.vertices
-                     if canopy and not self.is_ground(point) or
-                     lowest and self.is_lowest(point))
+        newpoints = (
+            point for point in self.geoply.vertices if
+            canopy and point['z'] - self.map.ground(point) > self.grounddepth
+            or lowest and point['z'] == self.map.ground(point))
         output = geoply.GeoPly.from_iterable(newpoints, self.geoply.utm_coord)
         output.write(new_fname)
         if lowest and canopy:
@@ -240,16 +258,16 @@ class MapObj:
             os.makedirs(trees_dir)
         # Group points into dict of ID number to list of points
         # This is relatively memory-intensive.
-        tree_clouds = collections.defaultdict(list)
+        tree_clouds = defaultdict(list)
+        trees = self._tree_components()
         for point in self.geoply.vertices:
-            tree = self.trees.get(coords(point, self.cellsize))
+            tree = trees(point)
             if tree is not None:
                 tree_clouds[tree].append(point)
         # Write them to disk
         for tree, points in tree_clouds.items():
-            out = geoply.GeoPly.from_iterable(points, self.geoply.utm_coord)
-            fname = 'tree_{}.ply'.format(tree)
-            out.write(os.path.join(trees_dir, fname))
+            geoply.GeoPly.from_iterable(points, self.geoply.utm_coord).write(
+                os.path.join(trees_dir, 'tree_{}.ply'.format(tree)))
 
 
     def stream_analysis(self, out: str) -> None:
@@ -323,20 +341,17 @@ def main():
     print('Reading from "{}" ...'.format(args.file))
     sparse = os.path.join(args.out, os.path.basename(args.file))
     if not args.file.endswith('_sparse.ply'):
-        sparse = os.path.join(
-            args.out, os.path.basename(args.file)[:-4] + '_sparse.ply')
-    sparse = sparse.replace('_part_1', '')
-    if os.path.isfile(sparse):
-        attr_map = MapObj(sparse, args=args)
-        print('Read {} points into {} cells'.format(
-            len(attr_map), len(attr_map.canopy)))
-    else:
-        attr_map = MapObj(args.file, args=args, colours=False)
+        sparse = os.path.join(args.out, os.path.basename(args.file)
+                              .rstrip('.ply') + '_sparse.ply')
+    if not os.path.isfile(sparse):
+        attr_map = MapObj(args.file, args=args)
         print('Read {} points into {} cells, writing "{}" ...'.format(
-            len(attr_map), len(attr_map.canopy), sparse))
+            len(attr_map), len(attr_map.map.canopy), sparse))
         attr_map.save_sparse_cloud(sparse)
         print('Reading colours from ' + sparse)
-        attr_map.update_colours()
+    attr_map = MapObj(sparse, args=args)
+    print('Read {} points into {} cells'.format(
+        len(attr_map), len(attr_map.map.canopy)))
     print('File IO complete, starting analysis...')
     table = '{}_analysis.csv'.format(sparse[:-4].replace('_sparse', ''))
     attr_map.stream_analysis(table)
