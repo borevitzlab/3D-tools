@@ -39,7 +39,7 @@ config = dict(
     packages=['src'],
     install_requires=['utm'],
     extras_require={
-        'test': ['mypy-lang', 'pylint', 'sphinx'],
+        'test': ['mypy', 'pylint', 'sphinx'],
         },
     entry_points={'console_scripts': ['forestutils=src.forestutils:main']},
 )
