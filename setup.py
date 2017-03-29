@@ -21,7 +21,7 @@ config = dict(
     license='GPL3+',
     url='https://github.com/borevitzlab/3D-tools',
 
-    keywords='forest LIDAR photogrammetery environment remote-sensing',
+    keywords='forest LIDAR photogrammetry environment remote-sensing',
     classifiers=[
         'Development Status :: 3 - Alpha',
         'Environment :: Console',
@@ -37,7 +37,7 @@ config = dict(
     ],
 
     packages=['src'],
-    install_requires=['utm'],
+    install_requires=['numpy', 'plyfile', 'utm'],
     extras_require={
         'test': ['mypy', 'pylint', 'sphinx'],
         },
