@@ -131,6 +131,7 @@ class MapObj:
         self.file = input_file
         self.canopy = dict()
         self.density = dict()
+        self.filtered_density = dict()
         self.ground = dict()
         self.colours = dict()
         self.trees = dict()
@@ -169,6 +170,7 @@ class MapObj:
         for p in pointcloudfile.read(self.file):
             if self.is_ground(p):
                 continue
+            # TODO: update filtered_density and divide by this later
             p_cols = {k: v for k, v in p._asdict().items() if k not in 'xyz'}
             idx = coords(p)
             if idx not in self.colours:
