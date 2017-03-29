@@ -211,5 +211,5 @@ class GeoPly(plyfile.PlyData):
             start += arr.size
 
         # Load data back into the complete structure and return
-        return GeoPly(to_arr, comments=comments, utm_coord=base.utm_coord)
+        return cls(to_arr, comments=comments, utm_coord=base.utm_coord)
 
