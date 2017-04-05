@@ -27,6 +27,7 @@ import argparse
 import csv
 import math
 import os
+import sys
 from typing import MutableMapping, NamedTuple, Tuple, Set
 
 import utm  # type: ignore
@@ -45,7 +46,7 @@ def coords(pos):
     attribute.
     * pos can be a full point tuple, or just (x, y)
     * use floor() to avoid imprecise float issues
-	"""
+    """
     x = math.floor(pos.x / args.cellsize)
     y = math.floor(pos.y / args.cellsize)
     return XY_Coord(x, y)
@@ -54,7 +55,7 @@ def coords(pos):
 def neighbors(key: XY_Coord) -> Tuple[XY_Coord, ...]:
     """ Take an XY coordinate key and return the adjacent keys,
 	whether they exist or not.
-	"""
+    """
     return tuple(XY_Coord(key.x + a, key.y + b)
                  for a in (-1, 0, 1) for b in (-1, 0, 1) if a or b)
 
@@ -87,7 +88,7 @@ def connected_components(input_dict: Coord_Labels) -> None:
 
 def detect_issues(ground_dict: Coord_Labels, prior: set) -> Set[XY_Coord]:
     """Identifies cells with more than 2:1 slope to 3+ adjacent cells.
-	"""
+    """
     problematic = set()
     for k in prior:
         adjacent = {ground_dict.get(n) for n in neighbors(k)}
@@ -105,7 +106,7 @@ def detect_issues(ground_dict: Coord_Labels, prior: set) -> Set[XY_Coord]:
 def smooth_ground(ground_dict: Coord_Labels) -> None:
     """Smooths the ground map, to reduce the impact of spurious points, eg.
     points far underground or misclassification of canopy as ground.
-	"""
+    """
     problematic = set(ground_dict)
     for _ in range(100):
         problematic = detect_issues(ground_dict, problematic)
@@ -121,9 +122,9 @@ def smooth_ground(ground_dict: Coord_Labels) -> None:
 class MapObj:
     """Stores a maximum and minimum height map of the cloud, in GRID_SIZE
     cells.  Hides data structure and accessed through coordinates.
-	Data structure is a set of dictionaries, one for each attribute. Each dict
-
-	"""
+    Data structure is a set of dictionaries, one for each attribute. Each dict
+    is a contains, for a single attribute, all the values for all the points.
+    """
     # pylint:disable=too-many-instance-attributes
 
     def __init__(self, input_file, *, colours=True):
@@ -168,7 +169,7 @@ class MapObj:
                 self.density[idx] = 1
                 self.canopy[idx] = p.z
                 self.ground[idx] = p.z
-				self.filtered_density[idx] = 1
+                self.filtered_density[idx] = 1
                 continue
             self.density[idx] += 1
             if self.ground[idx] > p.z:
@@ -189,7 +190,7 @@ class MapObj:
             p_cols = {k: v for k, v in p._asdict().items() if k not in 'xyz'}
             idx = coords(p)
             # update filtered_density and divide by this later
-			self.filtered_density[idx] += 1
+            self.filtered_density[idx] += 1
             if idx not in self.colours:
                 self.colours[idx] = p_cols
             else:
@@ -209,12 +210,14 @@ class MapObj:
         return point[2] == self.ground[coords(point)]
 
     def __len__(self) -> int:
-        """Total observed points."""
+        """Total observed points.
+        """
         return sum(self.density.values())
 
     def _tree_components(self) -> Coord_Labels:
         """Returns a dict where keys refer to connected components.
-        NB: Not all keys in other dicts exist in this output."""
+        NB: Not all keys in other dicts exist in this output.
+        """
         # Set up a boolean array of larger keys to search
         key_scale_record = {}  # type: Dict[XY_Coord, Set[XY_Coord]]
         for key in self.density:
@@ -233,7 +236,8 @@ class MapObj:
         return {s: trees[k] for k, v in key_scale_record.items() for s in v}
 
     def tree_data(self, keys: Set[XY_Coord]) -> dict:
-        """Return a dictionary of data about the tree in the given keys."""
+        """Return a dictionary of data about the tree in the given keys.
+        """
         # Calculate positional information
         x = self.utm.x + args.cellsize * sum(k.x for k in keys) / len(keys)
         y = self.utm.y + args.cellsize * sum(k.y for k in keys) / len(keys)
@@ -258,7 +262,7 @@ class MapObj:
 
     def all_trees(self):
         """ Yield the characteristics of each tree.
-		"""
+        """
         ids = list(set(self.trees.values()))
         keys = {v: set() for v in ids}
         for k, v in self.trees.items():
@@ -274,7 +278,7 @@ class MapObj:
     def save_sparse_cloud(self, new_fname, lowest=True, canopy=True):
         """ Yield points for a sparse point cloud, eliminating ~3/4 of all
         points without affecting analysis.
-		"""
+        """
         newpoints = (point for point in pointcloudfile.read(self.file)
                      if canopy and not self.is_ground(point) or
                      lowest and self.is_lowest(point))
@@ -283,7 +287,8 @@ class MapObj:
             self.file = new_fname
 
     def save_individual_trees(self):
-        """Save single trees to files."""
+        """Save single trees to files.
+        """
         if not args.savetrees:
             return
         if os.path.isfile(args.savetrees):
@@ -302,7 +307,7 @@ class MapObj:
 
     def stream_analysis(self, out: str) -> None:
         """ Save the list of trees with attributes to the file 'out'.
-		"""
+        """
         header = ('latitude', 'longitude', 'UTM_X', 'UTM_Y', 'UTM_zone',
                   'height', 'area', 'base_altitude', 'point_count') + tuple(
                       a for a in self.header.names if a not in 'xyz')
@@ -315,10 +320,11 @@ class MapObj:
 
 def get_args():
     """ Handle command-line arguments, including default values.
-	"""
+    """
     parser = argparse.ArgumentParser(
-        description=('Takes a .ply forest  point cloud; outputs a sparse point'
-                     'cloud and a .csv file of attributes for each tree.'))
+        description=('Takes a .ply forest  point cloud; outputs a sparse'
+                     '(canopy only) point cloud and a .csv file of attributes'
+                     'for each tree.'))
     parser.add_argument(
         'file', help='name of the file to process', type=str)
     parser.add_argument(
@@ -350,12 +356,13 @@ def get_args():
 
 def main_processing():
     """ Logic on which functions to call, and efficient order.
-	"""
-	# args is a global variable
+    """
+    # args is a global variable
     print('Reading from "{}" ...'.format(args.file))
 
-	# File I/O
-	# Set output file name to <input file name>_sparse.ply
+    # File I/O
+    
+    # Set output file name to <input file name>_sparse.ply
     sparse = os.path.join(args.out, os.path.basename(args.file))
     if not args.file.endswith('_sparse.ply'):
         sparse = os.path.join(
@@ -384,12 +391,16 @@ def main_processing():
 
 def main():
     """ Interface to call from outside the package.
-	"""
+    """
     # pylint:disable=global-statement
     global args
     args = get_args()
     if not os.path.isfile(args.file):
         raise IOError('Input file not found, ' + args.file)
+    # Check that 'out' is a valid folder BEFORE doing all the processing
+    if not os.path.isdir(args.out):
+         raise IOError('Output directory is not valid, ' + args.out)
+    print('Comencing main processing function.')
     main_processing()
 
 if __name__ == '__main__':
