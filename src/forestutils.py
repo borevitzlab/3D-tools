@@ -7,14 +7,14 @@ structure-from-motion software.
 
 Outputs (most are optional):
 
-* A 'sparse' point cloud, with most ground points discarded.  This eases
-  further analysis, storage, etc without compromising coverage of vegetation.
+* A 'sparse' (i.e. canopy-only) point cloud, with most ground points discarded.
+  This eases further analysis, storage, etc without compromising coverage of vegetation.
 * A ``.csv`` file listing identified trees, with traits including location,
   height, canopy area, colour, and point count.
 * Individual files containing the point cloud for each tree.
 
 Extensive use of mutable coordinate-property mappings and streamed input
-ensure that even files to large to load in memory can be processed.  In extreme
+ensure that even files too large to load in memory can be processed.  In extreme
 cases, the resolution can be decreased to trade accuracy for memory.
 
 Example outputs (from an older version):
@@ -40,27 +40,32 @@ Coord_Labels = MutableMapping[XY_Coord, int]
 
 
 def coords(pos):
-    """Return a tuple of integer coordinates as keys for the dict/map.
+    """ Return a tuple of integer coordinates as keys for the MapObj dict/map.
+    This is necessary because the MapObj uses a dictionary to store each
+    attribute.
     * pos can be a full point tuple, or just (x, y)
-    * use floor() to avoid imprecise float issues"""
+    * use floor() to avoid imprecise float issues
+	"""
     x = math.floor(pos.x / args.cellsize)
     y = math.floor(pos.y / args.cellsize)
     return XY_Coord(x, y)
 
 
 def neighbors(key: XY_Coord) -> Tuple[XY_Coord, ...]:
-    """Return the adjacent keys, whether they exist or not."""
+    """ Take an XY coordinate key and return the adjacent keys,
+	whether they exist or not.
+	"""
     return tuple(XY_Coord(key.x + a, key.y + b)
                  for a in (-1, 0, 1) for b in (-1, 0, 1) if a or b)
 
 
 def connected_components(input_dict: Coord_Labels) -> None:
-    """Connected components in a dict of coordinates.
-
+    """ Connected components in a dict of coordinates.
     Uses depth-first search.  Non-component cells are absent from the input.
     """
     def expand(old_key: XY_Coord, com: MutableMapping) -> None:
-        """Implement depth-first search."""
+        """Implement depth-first search.
+		"""
         for key in neighbors(old_key):
             if com.get(key) is None:
                 return
@@ -81,7 +86,8 @@ def connected_components(input_dict: Coord_Labels) -> None:
 
 
 def detect_issues(ground_dict: Coord_Labels, prior: set) -> Set[XY_Coord]:
-    """Identifies cells with more than 2:1 slope to 3+ adjacent cells."""
+    """Identifies cells with more than 2:1 slope to 3+ adjacent cells.
+	"""
     problematic = set()
     for k in prior:
         adjacent = {ground_dict.get(n) for n in neighbors(k)}
@@ -98,7 +104,8 @@ def detect_issues(ground_dict: Coord_Labels, prior: set) -> Set[XY_Coord]:
 
 def smooth_ground(ground_dict: Coord_Labels) -> None:
     """Smooths the ground map, to reduce the impact of spurious points, eg.
-    points far underground or misclassification of canopy as ground."""
+    points far underground or misclassification of canopy as ground.
+	"""
     problematic = set(ground_dict)
     for _ in range(100):
         problematic = detect_issues(ground_dict, problematic)
@@ -113,7 +120,10 @@ def smooth_ground(ground_dict: Coord_Labels) -> None:
 
 class MapObj:
     """Stores a maximum and minimum height map of the cloud, in GRID_SIZE
-    cells.  Hides data structure and accessed through coordinates."""
+    cells.  Hides data structure and accessed through coordinates.
+	Data structure is a set of dictionaries, one for each attribute. Each dict
+
+	"""
     # pylint:disable=too-many-instance-attributes
 
     def __init__(self, input_file, *, colours=True):
@@ -146,7 +156,11 @@ class MapObj:
             self.update_colours()
 
     def update_spatial(self):
-        """Expand, correct, or maintain map with a new observed point."""
+        """ Expand, correct, or maintain map with a new observed point.
+			Initialize density and filtered_density to 1. Increment
+			density but do not incerement filtered_density - that is done in
+			function update_colors
+        """
         # Fill out the spatial info in the file
         for p in pointcloudfile.read(self.file):
             idx = coords(p)
@@ -154,6 +168,7 @@ class MapObj:
                 self.density[idx] = 1
                 self.canopy[idx] = p.z
                 self.ground[idx] = p.z
+				self.filtered_density[idx] = 1
                 continue
             self.density[idx] += 1
             if self.ground[idx] > p.z:
@@ -164,15 +179,17 @@ class MapObj:
         self.trees = self._tree_components()
 
     def update_colours(self):
-        """Expand, correct, or maintain map with a new observed point."""
+        """Expand, correct, or maintain map with a new observed point.
+        """
         # We assume that vertex attributes not named "x", "y" or "z"
         # are colours, and thus accumulate a total to get the mean
         for p in pointcloudfile.read(self.file):
             if self.is_ground(p):
                 continue
-            # TODO: update filtered_density and divide by this later
             p_cols = {k: v for k, v in p._asdict().items() if k not in 'xyz'}
             idx = coords(p)
+            # update filtered_density and divide by this later
+			self.filtered_density[idx] += 1
             if idx not in self.colours:
                 self.colours[idx] = p_cols
             else:
@@ -180,13 +197,15 @@ class MapObj:
                     self.colours[idx][k] += v
 
     def is_ground(self, point) -> bool:
-        """Returns boolean whether the point is not classified as ground - ie
+        """Returns boolean whether the point is not classified as ground - i.e.
         True if within GROUND_DEPTH of the lowest point in the cell.
-        If not lossy, also true for lowest ground point in a cell."""
+        If not lossy, also true for lowest ground point in a cell.
+        """
         return point[2] - self.ground[coords(point)] < args.grounddepth
 
     def is_lowest(self, point) -> bool:
-        """Returns boolean whether the point is lowest in that grid cell."""
+        """Returns boolean whether the point is lowest in that grid cell.
+        """
         return point[2] == self.ground[coords(point)]
 
     def __len__(self) -> int:
@@ -234,11 +253,12 @@ class MapObj:
             out['height'] = max(out['height'], self.canopy[k] - self.ground[k])
             out['point_count'] += self.density[k]
             for colour, total in self.colours[k].items():
-                out[colour] = total / self.density[k]
+                out[colour] = total / self.filtered_density[k]
         return out
 
     def all_trees(self):
-        """Yield the characteristics of each tree."""
+        """ Yield the characteristics of each tree.
+		"""
         ids = list(set(self.trees.values()))
         keys = {v: set() for v in ids}
         for k, v in self.trees.items():
@@ -252,8 +272,9 @@ class MapObj:
                 yield data
 
     def save_sparse_cloud(self, new_fname, lowest=True, canopy=True):
-        """Yield points for a sparse point cloud, eliminating ~3/4 of all
-        points without affecting analysis."""
+        """ Yield points for a sparse point cloud, eliminating ~3/4 of all
+        points without affecting analysis.
+		"""
         newpoints = (point for point in pointcloudfile.read(self.file)
                      if canopy and not self.is_ground(point) or
                      lowest and self.is_lowest(point))
@@ -280,7 +301,8 @@ class MapObj:
                 tree_to_file[val](point)
 
     def stream_analysis(self, out: str) -> None:
-        """Saves the list of trees with attributes to the file 'out'."""
+        """ Save the list of trees with attributes to the file 'out'.
+		"""
         header = ('latitude', 'longitude', 'UTM_X', 'UTM_Y', 'UTM_zone',
                   'height', 'area', 'base_altitude', 'point_count') + tuple(
                       a for a in self.header.names if a not in 'xyz')
@@ -292,7 +314,8 @@ class MapObj:
 
 
 def get_args():
-    """Handle command-line arguments, including default values."""
+    """ Handle command-line arguments, including default values.
+	"""
     parser = argparse.ArgumentParser(
         description=('Takes a .ply forest  point cloud; outputs a sparse point'
                      'cloud and a .csv file of attributes for each tree.'))
@@ -326,8 +349,13 @@ def get_args():
 
 
 def main_processing():
-    """Logic on which functions to call, and efficient order."""
+    """ Logic on which functions to call, and efficient order.
+	"""
+	# args is a global variable
     print('Reading from "{}" ...'.format(args.file))
+
+	# File I/O
+	# Set output file name to <input file name>_sparse.ply
     sparse = os.path.join(args.out, os.path.basename(args.file))
     if not args.file.endswith('_sparse.ply'):
         sparse = os.path.join(
@@ -345,6 +373,7 @@ def main_processing():
         print('Reading colours from ' + sparse)
         attr_map.update_colours()
     print('File IO complete, starting analysis...')
+
     table = '{}_analysis.csv'.format(sparse[:-4].replace('_sparse', ''))
     attr_map.stream_analysis(table)
     if args.savetrees:
@@ -354,7 +383,8 @@ def main_processing():
 
 
 def main():
-    """Interface to call from outside the package."""
+    """ Interface to call from outside the package.
+	"""
     # pylint:disable=global-statement
     global args
     args = get_args()
