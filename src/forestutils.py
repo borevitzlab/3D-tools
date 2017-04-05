@@ -406,5 +406,6 @@ def main():
 if __name__ == '__main__':
     # Call to get_args is duplicated to work in static analysis, from
     # command line, and when installed as package (calls main directly)
+    print('Welcome to forestutils tree analysis software')
     args = get_args()
     main()
