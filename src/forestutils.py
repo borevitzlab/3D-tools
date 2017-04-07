@@ -8,7 +8,8 @@ structure-from-motion software.
 Outputs (most are optional):
 
 * A 'sparse' (i.e. canopy-only) point cloud, with most ground points discarded.
-  This eases further analysis, storage, etc without compromising coverage of vegetation.
+  This eases further analysis, storage, etc without compromising coverage of
+  vegetation.
 * A ``.csv`` file listing identified trees, with traits including location,
   height, canopy area, colour, and point count.
 * Individual files containing the point cloud for each tree.
@@ -27,10 +28,10 @@ import argparse
 import csv
 import math
 import os
-import sys
-from typing import MutableMapping, NamedTuple, Tuple, Set
+# `Dict` used in a variable annotation, with comment syntax for Python <3.6
+from typing import Dict, MutableMapping, NamedTuple, Tuple, Set  # pylint:disable=unused-import
 
-import utm  # type: ignore
+import utm
 
 from . import pointcloudfile
 
@@ -44,6 +45,7 @@ def coords(pos):
     """ Return a tuple of integer coordinates as keys for the MapObj dict/map.
     This is necessary because the MapObj uses a dictionary to store each
     attribute.
+
     * pos can be a full point tuple, or just (x, y)
     * use floor() to avoid imprecise float issues
     """
@@ -52,9 +54,9 @@ def coords(pos):
     return XY_Coord(x, y)
 
 
-def neighbors(key: XY_Coord) -> Tuple[XY_Coord, ...]:
+def neighbors(key: XY_Coord) -> Tuple[XY_Coord, ...]:  # pylint:disable=invalid-sequence-index
     """ Take an XY coordinate key and return the adjacent keys,
-	whether they exist or not.
+	 whether they exist or not.
     """
     return tuple(XY_Coord(key.x + a, key.y + b)
                  for a in (-1, 0, 1) for b in (-1, 0, 1) if a or b)
@@ -361,7 +363,7 @@ def main_processing():
     print('Reading from "{}" ...'.format(args.file))
 
     # File I/O
-    
+
     # Set output file name to <input file name>_sparse.ply
     sparse = os.path.join(args.out, os.path.basename(args.file))
     if not args.file.endswith('_sparse.ply'):
@@ -399,7 +401,7 @@ def main():
         raise IOError('Input file not found, ' + args.file)
     # Check that 'out' is a valid folder BEFORE doing all the processing
     if not os.path.isdir(args.out):
-         raise IOError('Output directory is not valid, ' + args.out)
+        raise IOError('Output directory is not valid, ' + args.out)
     print('Comencing main processing function.')
     main_processing()
 

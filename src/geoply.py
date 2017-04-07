@@ -65,6 +65,7 @@ class GeoPly(plyfile.PlyData):
         stream may be a filename, or a file-like object.
 
         The UTM coordinate (self.utm_coord) is read from
+
         - comments in the file header, if the pointcloud was created
           by this class.
         - the corresponding '_ply_offset.xyz' file, if the pointcloud was
@@ -72,6 +73,7 @@ class GeoPly(plyfile.PlyData):
           coordinates.
 
         Data cleaning consists of:
+
         - discarding non-"vertex" elements (if present)
         - removing the marker comment if written by Meshlab, and if a uniform
           alpha channel was added removing that too
@@ -212,4 +214,3 @@ class GeoPly(plyfile.PlyData):
 
         # Load data back into the complete structure and return
         return cls(to_arr, comments=comments, utm_coord=base.utm_coord)
-

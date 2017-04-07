@@ -3,8 +3,9 @@ python:
   - "3.6"
 install: pip install -e .[test]
 script:
-  - pylint src -d fixme
-  - mypy src
+  # Pylint thinks typing.NamedTuple isn't callable, so disable that check for now
+  - pylint src -d fixme,not-callable
+  - mypy src --ignore-missing-imports
   - sphinx-build -qW . _build/html
   - sh demo.sh
 notifications:
